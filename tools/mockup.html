@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>小黑屋 · 竖屏 240×320 像素级切片 v5(LVGL 同构,与固件实装一比一)</title>
+<style>
+  /* ============================================================
+     切片规范 v5 · 竖屏 240×320 · 与固件实装一比一(2026-09-24)
+     层级:scr(240×320,设备外壳) > panel(240×320@0,0 全屏无边框,
+     pad 8) > content(198×278 @13,13 居中) > 各元素(绝对坐标)。
+     弹窗层(veil/dpanel)是 scr 的子级,盖在 panel 之上。
+     字号: f12=12px(行高15) f16=16px(行高20) f24=24px(行高30)
+     颜色: BG #0D0D0D | PANEL #1C1917 | BORDER #57534E | TEXT #E7E5E4
+           DIM #A8A29E | GOLD #FFD928 | CD #3A3A44 | 危险 #E43B2F
+     ============================================================ */
+  *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+  html, body { margin:0; padding:0; }
+  body { line-height:1; background:#2a2a2e;
+         display:flex; flex-wrap:wrap; gap:20px; padding:20px; align-items:flex-start; }
+  .item { display:flex; flex-direction:column; width:264px; }
+  .label { color:#bbb; font-size:12px; margin:0 0 6px; }
+  .spec  { color:#888; font-size:11px; margin-top:4px; font-family:Consolas,monospace;
+           width:264px; white-space:normal; word-break:break-all; }
+  div, span, i { background:transparent; }
+
+  .scr  { position:relative; width:240px; height:320px;
+          background:#0D0D0D; border:12px solid #1f1f22; border-radius:14px;
+          margin-bottom:8px; overflow:hidden; }
+  /* 面板全屏铺满:无边框无圆角,pad 8(内容距屏幕边 8px,不贴边) */
+  .panel{ position:absolute; left:0px; top:0px; width:240px; height:320px;
+          background:#1C1917; border:none; padding:8px; border-radius:0; }
+  /* 内容区 198×278 在面板可用区(224×304)内居中:左/上各 13px */
+  .content{ position:absolute; left:13px; top:13px; width:198px; height:278px; }
+  .el   { position:absolute; }
+  .txtblk { position:absolute; white-space:nowrap; overflow:hidden; }
+  .txtf { position:absolute; overflow:hidden; }
+
+  .f12 { font-size:12px; line-height:15px; }
+  .f16 { font-size:16px; line-height:20px; }
+  .f24 { font-size:24px; line-height:30px; }
+  .gold { color:#FFD928; } .dim { color:#A8A29E; }
+  .text { color:#E7E5E4; } .lock { color:#57534E; }
+  .bold { font-weight:bold; }
+
+  .hr  { position:absolute; height:1px; background:#57534E; }
+  .lg { position:absolute; height:15px; text-align:center; }
+  .sw { display:inline-block; width:10px; height:10px; margin:0 2px 0 8px;
+        vertical-align:-1px; }
+  .ctr { text-align:center; }
+  .act.ctr .txt { left:0; width:100%; text-align:center; }
+  .cell { position:absolute; height:15px; white-space:nowrap; overflow:hidden; }
+  .cell .k { color:#A8A29E; }
+
+  /* 动作行 198×22:容器 + 冷却矩形 + 箭头列(12px)+ 文字(14,1)。
+     焦点样式 = 金色文字 + 箭头,**无边框**(v5:去 outline/inset 环) */
+  .act  { position:absolute; width:198px; height:22px;
+          border-radius:3px; overflow:hidden; }
+  .act .fill { position:absolute; left:1px; top:1px; bottom:1px;
+               background:#3A3A44; border-radius:2px; }
+  .act .txt  { position:absolute; left:14px; top:1px; height:20px;
+               line-height:20px; width:170px; }
+  .act.focus .txt { color:#FFD928; }
+  /* 固定宽度箭头列 12px:焦点 ">",非焦点空白,文字零位移 */
+  .act .txt::before { content:""; display:inline-block; width:12px; }
+  .act.focus .txt::before { content:">"; color:#FFD928; }
+  .act.nocur .txt::before { content:none; }
+
+  /* 列表行 198×22:箭头列(10px)+ 名称(14,1,w140)+ 值(right6,w90) */
+  .row  { position:absolute; width:198px; height:22px;
+          border-radius:3px; overflow:hidden; }
+  .row .mark { position:absolute; left:4px; top:1px; width:10px; height:20px;
+               font-size:12px; line-height:20px; color:#FFD928;
+               visibility:hidden; }
+  .row.focus .mark { visibility:visible; }
+  .row.focus .t { color:#FFD928; }
+  .row .t { position:absolute; left:14px; top:1px; height:20px;
+            font-size:12px; line-height:20px; color:#E7E5E4;
+            white-space:nowrap; overflow:hidden; width:140px; }
+  .row .v { position:absolute; right:6px; top:1px; width:90px; height:20px;
+            font-size:12px; line-height:20px; text-align:right; color:#A8A29E;
+            white-space:nowrap; overflow:hidden; }
+  .row.bld .t { width:80px; }
+  .row.bld .v { font-size:11px; line-height:20px; max-width:100px; }
+
+  /* 导航栏 4×47×20,y=24。文字 + 底部指示线(激活=金色2px);
+     光标(焦点)= 完整金框 outline;锁定 tab 灰字 */
+  .tab { position:absolute; width:47px; height:20px; text-align:center;
+         font-size:12px; line-height:18px; color:#A8A29E;
+         border:none; border-bottom:1px solid #3A3A44;
+         white-space:nowrap; overflow:hidden; }
+  .tab.on  { color:#FFD928; font-weight:bold; border-bottom:2px solid #FFD928; }
+  .tab.cur { outline:1px solid #FFD928; color:#FFD928; }
+  .tab.cur.lock { outline-color:#57534E; }
+  .tab.lock { color:#57534E; }
+
+  /* 弹窗层(scr 子级):veil 全屏遮罩;dpanel 金边 2px,水平居中 x=22 */
+  .veil { position:absolute; left:0; top:0; width:240px; height:320px; background:#101010; }
+  .dpanel { position:absolute; left:22px; background:#1C1917; border:2px solid #FFD928;
+            padding:10px; overflow:hidden; border-radius:4px; }
+  /* 子级坐标 = 面板内容原点。⚠ CSS 绝对定位的包含块是 padding box 原点,
+     padding 推不动绝对子级 —— 必须用 margin 复现 LVGL 的 pad_all(10) */
+  .dpanel > .txtf, .dpanel > .txtblk, .dpanel > .act { margin:10px 0 0 10px; }
+  .dpanel > .act { width:172px; }
+  /* 选项底部锚定:最后一行固定 y=164,向上堆叠 */
+  .dpanel .dtitle { position:absolute; left:0; top:0; height:28px; font-size:24px;
+                    line-height:30px; color:#FFD928; font-weight:bold; }
+
+  /* 主页日志:逐行 15px,最新在上,旧条目向背景渐隐(opacity) */
+  .logline { position:absolute; left:0px; width:198px; height:15px;
+             font-size:12px; line-height:15px; color:#E7E5E4;
+             white-space:nowrap; overflow:hidden; }
+  /* 页底说明行(hint):村庄收入总览 / 建筑作用 / 调节操作 */
+  .hint { position:absolute; left:0px; top:230px; width:198px; height:15px;
+          font-size:12px; line-height:15px; color:#A8A29E;
+          white-space:nowrap; overflow:hidden; }
+</style>
+</head>
+<body>
+
+<div class="item">
+<div class="label">① 标题页</div>
+<div class="scr"><div class="panel"><div class="content">
+  <div class="txtblk f24 gold bold ctr" style="left:0px; top:100px; width:198px;">小黑屋</div>
+  <div class="txtblk f12 dim ctr" style="left:0px; top:136px; width:198px;">屋里冷得刺骨</div>
+  <div class="act focus ctr nocur" style="left:39px; top:180px; width:120px;">
+    <div class="txt f16 text">OK键开始</div>
+  </div>
+</div>
+</div></div>
+<div class="spec">面板全屏 240×320 无边框 | 内容 198×278 @13,13 居中</div>
+</div>
+
+<div class="item">
+<div class="label">② 主页 · 小黑屋(3 行动作 → 日志 6 行)</div>
+<div class="scr"><div class="panel"><div class="content">
+  <div class="txtblk f16 gold bold" style="left:0px; top:0px; width:100px;">小黑屋</div>
+  <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">87%</div>
+  <div class="tab on" style="left:0px; top:24px;">小屋</div>
+  <div class="tab" style="left:50px; top:24px;">村庄</div>
+  <div class="tab lock" style="left:100px; top:24px;">荒野</div>
+  <div class="tab" style="left:150px; top:24px;">≡</div>
+  <div class="cell f12 text" style="left:0px; top:48px;">火<span class="k">旺</span></div>
+  <div class="cell f12 text" style="left:49px; top:48px;">人 <span class="k">2</span></div>
+  <div class="cell f12 text" style="left:99px; top:48px;">阱 <span class="k">1</span></div>
+  <div class="cell f12 text" style="left:148px; top:48px;">木 <span class="k">35</span></div>
+  <div class="cell f12 text" style="left:0px; top:63px;">毛 <span class="k">3</span></div>
+  <div class="cell f12 text" style="left:49px; top:63px;">肉 <span class="k">2</span></div>
+  <div class="cell f12 text" style="left:99px; top:63px;">诱 <span class="k">1</span></div>
+  <div class="logline" style="top:90px;">火头正旺,先等等再添</div>
+  <div class="logline" style="top:105px; opacity:.78;">火烧得更旺了些</div>
+  <div class="logline" style="top:120px; opacity:.56;">让她留下</div>
+  <div class="logline" style="top:135px; opacity:.35;">收集到 10 木</div>
+  <div class="logline" style="top:150px; opacity:.15;">陷阱收获:毛皮 诱饵</div>
+  <div class="logline" style="top:165px; opacity:.05;">添了柴,火烧得旺了些</div>
+  <div class="act focus" style="left:0px; top:184px;">
+    <div class="fill" style="width:70%;"></div>
+    <div class="txt f16 gold">收集木材…</div>
+  </div>
+  <div class="act" style="left:0px; top:208px;">
+    <div class="txt f16 text">添柴(1木)</div>
+  </div>
+  <div class="act" style="left:0px; top:232px;">
+    <div class="txt f16 text">建造…</div>
+  </div>
+</div>
+</div></div>
+<div class="spec">日志 6 行×15px @90(最新在上,渐隐) | 动作 184/208/232 | 冷却条铺满行内宽</div>
+</div>
+
+<div class="item">
+<div class="label">③ 建造页(不可建只列缺口,底部显示建筑作用)</div>
+<div class="scr"><div class="panel"><div class="content">
+  <div class="txtblk f16 gold bold" style="left:0px; top:0px; width:100px;">建造</div>
+  <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">87%</div>
+  <div class="cell f12 text" style="left:0px; top:28px;">木 <span class="k">10</span></div>
+  <div class="cell f12 text" style="left:49px; top:28px;">毛 <span class="k">0</span></div>
+  <div class="cell f12 text" style="left:99px; top:28px;">肉 <span class="k">0</span></div>
+  <div class="cell f12 text" style="left:148px; top:28px;">诱 <span class="k">0</span></div>
+  <div class="row focus" style="left:0px; top:52px;"><div class="mark">></div><div class="t">板车 Lv0</div><div class="v">10木</div></div>
+  <div class="row" style="left:0px; top:75px;"><div class="mark"></div><div class="t lock">陷阱 Lv0</div><div class="v">缺5木</div></div>
+  <div class="row" style="left:0px; top:98px;"><div class="mark"></div><div class="t lock">小屋 Lv0</div><div class="v">缺10木</div></div>
+  <div class="row" style="left:0px; top:121px;"><div class="mark"></div><div class="t lock">猎屋 Lv0</div><div class="v">缺140木10毛5肉</div></div>
+  <div class="row" style="left:0px; top:144px;"><div class="mark"></div><div class="t lock">贸站 Lv0</div><div class="v">缺290木20毛</div></div>
+  <div class="row" style="left:0px; top:167px;"><div class="mark"></div><div class="t">返回</div><div class="v"></div></div>
+  <div class="hint">解锁陷阱制作</div>
+</div>
+</div></div>
+<div class="spec">不可建只列缺口(缺X木·X毛·X肉) | 焦点跳过禁用行 | 底部=光标建筑作用</div>
+</div>
+
+<div class="item">
+<div class="label">④ 事件弹窗(水平居中,选项底部锚定)</div>
+<div class="scr">
+<div class="veil"></div>
+<div class="dpanel" style="top:42px; width:196px; height:236px;">
+  <div class="txtf f16 text" style="left:0px; top:0px; width:176px; height:80px;">
+    门被推开,一个陌生的女人站在寒风里。她说她可以帮忙看火。
+  </div>
+  <div class="act focus" style="left:0px; top:140px;">
+    <div class="txt f16 text">让她留下</div>
+  </div>
+  <div class="act" style="left:0px; top:164px;">
+    <div class="txt f16 text">赶走她</div>
+  </div>
+</div></div>
+<div class="spec">遮罩全屏 | 弹窗196×236@(22,42) 水平居中 | 正文176×80 | 选项底部(末行164) | 禁返回</div>
+</div>
+
+<div class="item">
+<div class="label">⑤ 村庄页(无资源带;底部收入总览)</div>
+<div class="scr"><div class="panel"><div class="content">
+  <div class="txtblk f16 gold bold" style="left:0px; top:0px; width:100px;">村庄</div>
+  <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">64%</div>
+  <div class="tab" style="left:0px; top:24px;">小屋</div>
+  <div class="tab on" style="left:50px; top:24px;">村庄</div>
+  <div class="tab lock" style="left:100px; top:24px;">荒野</div>
+  <div class="tab" style="left:150px; top:24px;">≡</div>
+  <div class="row focus" style="left:0px; top:72px;"><div class="mark">></div><div class="t">伐木工</div><div class="v">2人 +2木</div></div>
+  <div class="row" style="left:0px; top:96px;"><div class="mark"></div><div class="t">猎人</div><div class="v">1人 +毛/肉</div></div>
+  <div class="row" style="left:0px; top:120px;"><div class="mark"></div><div class="t lock">制革匠</div><div class="v">未实装</div></div>
+  <div class="row" style="left:0px; top:144px;"><div class="mark"></div><div class="t">采集者</div><div class="v">0人 +1木</div></div>
+  <div class="row" style="left:0px; top:168px;"><div class="mark"></div><div class="t lock">铁匠</div><div class="v">需铁匠铺</div></div>
+  <div class="row" style="left:0px; top:192px;"><div class="mark"></div><div class="t">返回</div><div class="v"></div></div>
+  <div class="hint">共3人 每10s:木+5 毛+1 肉+1</div>
+</div>
+</div></div>
+<div class="spec">确定=分配人数(上加下减,长按=5) | 底部=收入总览 | 采集者=未分配人口 | 无长按返回</div>
+</div>
+
+<div class="item">
+<div class="label">⑥ 荒野地图(无页签)</div>
+<div class="scr"><div class="panel"><div class="content">
+  <div class="txtblk f16 gold bold" style="left:0px; top:0px; width:100px;">荒野</div>
+  <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">41%</div>
+  <div class="cell f12 text" style="left:0px; top:24px;">水 <span class="k">6</span></div>
+  <div class="cell f12 text" style="left:49px; top:24px;">食 <span class="k">5</span></div>
+  <div class="cell f12 text" style="left:99px; top:24px;">HP <span class="k">8</span></div>
+  <div class="cell f12 text" style="left:148px; top:24px;">步 <span class="k">12</span></div>
+  <div class="el" style="left:50px; top:44px; width:98px; height:98px;
+       display:grid; grid-template-columns:repeat(9,10px); grid-auto-rows:10px; gap:1px;">
+    <div style="background:#0D0D0D;"></div><div style="background:#3A3A44;"></div><div style="background:#3A3A44;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div>
+    <div style="background:#0D0D0D;"></div><div style="background:#3A3A44;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div>
+    <div style="background:#0D0D0D;"></div><div style="background:#3A3A44;"></div><div style="background:#55524D;"></div><div style="background:#55524D;"></div><div style="background:#55524D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div>
+    <div style="background:#0D0D0D;"></div><div style="background:#55524D;"></div><div style="background:#4A90D9;"></div><div style="background:#55524D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div>
+    <div style="background:#0D0D0D;"></div><div style="background:#55524D;"></div><div style="background:#55524D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div>
+    <div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#FFD928;"></div><div style="background:#55524D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div>
+    <div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#55524D;"></div><div style="background:#55524D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div>
+    <div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div>
+    <div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div><div style="background:#0D0D0D;"></div>
+  </div>
+  <div class="lg f12 dim" style="left:0px; top:146px; width:198px;">
+    <i class="sw" style="background:#4A90D9;"></i>你<i class="sw" style="background:#FFD928;"></i>家<i class="sw" style="background:#55524D;"></i>照亮
+  </div>
+  <div class="lg f12 dim" style="left:0px; top:161px; width:198px;">
+    <i class="sw" style="background:#3A3A44;"></i>走过<i class="sw" style="background:#0D0D0D;border:1px solid #33302C;"></i>未知
+  </div>
+  <div class="row focus" style="left:0px; top:188px;"><div class="mark">></div><div class="t">东 干涸河床 2格</div><div class="v"></div></div>
+  <div class="row" style="left:0px; top:212px;"><div class="mark"></div><div class="t">北 未知</div><div class="v"></div></div>
+  <div class="row" style="left:0px; top:236px;"><div class="mark"></div><div class="t">西 小屋 3格</div><div class="v">回</div></div>
+</div>
+</div></div>
+<div class="spec">无页签,资源行@24 | 地图98×98@(50,44) | 图例146/161 | 目的地188/212/236</div>
+</div>
+
+<div class="item">
+<div class="label">⑦ 战斗</div>
+<div class="scr"><div class="panel"><div class="content">
+  <div class="txtblk f16 gold bold" style="left:0px; top:0px; width:100px;">战斗</div>
+  <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">41%</div>
+  <div class="cell f12 dim" style="left:0px; top:30px; width:198px;">巨鼠 66%</div>
+  <div class="el" style="left:0px; top:46px; width:198px; height:10px; background:#0D0D0D; border:1px solid #57534E;">
+    <div class="el" style="left:1px; top:1px; width:131px; height:8px; background:#E43B2F;"></div>
+  </div>
+  <div class="cell f12 dim" style="left:0px; top:62px; width:198px;">你(铁剑) 83%</div>
+  <div class="el" style="left:0px; top:78px; width:198px; height:10px; background:#0D0D0D; border:1px solid #57534E;">
+    <div class="el" style="left:1px; top:1px; width:164px; height:8px; background:#4A90D9;"></div>
+  </div>
+  <div class="logline dim" style="top:100px;">你挥剑命中,造成 6 伤害</div>
+  <div class="logline dim" style="top:115px;">巨鼠咬中你,造成 2 伤害</div>
+  <div class="act focus" style="left:0px; top:168px;">
+    <div class="txt f16 text">攻击(铁剑 4-7)</div>
+  </div>
+  <div class="act" style="left:0px; top:192px;">
+    <div class="txt f16 text">换武器(钢剑 8-12)</div>
+  </div>
+  <div class="act" style="left:0px; top:216px;">
+    <div class="txt f16 text">补给(食+3)</div>
+  </div>
+  <div class="act" style="left:0px; top:240px;">
+    <div class="txt f16 text">逃跑(70%)</div>
+  </div>
+</div>
+</div></div>
+<div class="spec">名30/条46/名62/条78 | 日志100 | 动作168/192/216/240 禁返回 | 〔规划 M4〕</div>
+</div>
+
+<div class="item">
+<div class="label">⑧ 贸易站(需贸易站解锁交易行)</div>
+<div class="scr"><div class="panel"><div class="content">
+  <div class="txtblk f16 gold bold" style="left:0px; top:0px; width:100px;">贸易</div>
+  <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">64%</div>
+  <div class="cell f12 text" style="left:0px; top:24px;">木 <span class="k">240</span></div>
+  <div class="cell f12 text" style="left:49px; top:24px;">毛 <span class="k">96</span></div>
+  <div class="cell f12 text" style="left:99px; top:24px;">肉 <span class="k">40</span></div>
+  <div class="cell f12 text" style="left:148px; top:24px;">诱 <span class="k">12</span></div>
+  <div class="row focus" style="left:0px; top:48px;"><div class="mark">></div><div class="t">卖 毛皮×10</div><div class="v">得 50木</div></div>
+  <div class="row" style="left:0px; top:72px;"><div class="mark"></div><div class="t">卖 肉×10</div><div class="v">得 30木</div></div>
+  <div class="row" style="left:0px; top:96px;"><div class="mark"></div><div class="t">买 诱饵×5</div><div class="v">花 15木</div></div>
+  <div class="row" style="left:0px; top:120px;"><div class="mark"></div><div class="t lock">买 皮甲</div><div class="v lock">100木</div></div>
+  <div class="row" style="left:0px; top:144px;"><div class="mark"></div><div class="t">全部卖出</div><div class="v">需确认</div></div>
+  <div class="row" style="left:0px; top:168px;"><div class="mark"></div><div class="t">返回</div><div class="v"></div></div>
+</div>
+</div></div>
+<div class="spec">资源摘要@24(需贸易站) | 不足/未建贸易站的行光标跳过 | 全部卖出 → 确认页⑪</div>
+</div>
+
+<div class="item">
+<div class="label">⑨ 地点内部 · 废村(房间 3×3 + 图例)</div>
+<div class="scr"><div class="panel"><div class="content">
+  <div class="txtblk f16 gold bold" style="left:0px; top:0px; width:100px;">废村</div>
+  <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">41%</div>
+  <div class="cell f12 text" style="left:0px; top:24px;">水 <span class="k">4</span></div>
+  <div class="cell f12 text" style="left:49px; top:24px;">食 <span class="k">3</span></div>
+  <div class="cell f12 text" style="left:99px; top:24px;">HP <span class="k">8</span></div>
+  <div class="cell f12 text" style="left:148px; top:24px;">包 <span class="k">5/8</span></div>
+  <div class="el" style="left:58px; top:44px; width:82px; height:82px;
+       display:grid; grid-template-columns:repeat(3,26px); grid-auto-rows:26px; gap:2px;">
+    <div style="background:#3A3A44;"></div><div style="background:#55524D;"></div><div style="background:#4A90D9;"></div>
+    <div style="background:#3A3A44;"></div><div style="background:#E43B2F;"></div><div style="background:#0D0D0D;"></div>
+    <div style="background:#3A3A44;"></div><div style="background:#3A3A44;"></div><div style="background:#0D0D0D;"></div>
+  </div>
+  <div class="lg f12 dim" style="left:0px; top:132px; width:198px;">
+    <i class="sw" style="background:#4A90D9;"></i>你<i class="sw" style="background:#E43B2F;"></i>敌人<i class="sw" style="background:#3A3A44;"></i>已搜<i class="sw" style="background:#0D0D0D;border:1px solid #33302C;"></i>未搜
+  </div>
+  <div class="row focus" style="left:0px; top:158px;"><div class="mark">></div><div class="t">东 房间(未搜)</div><div class="v"></div></div>
+  <div class="row" style="left:0px; top:182px;"><div class="mark"></div><div class="t">南 房间(空)</div><div class="v"></div></div>
+  <div class="row" style="left:0px; top:206px;"><div class="mark"></div><div class="t">西北 房间(敌人)</div><div class="v" style="color:#E43B2F;">遭遇</div></div>
+  <div class="row" style="left:0px; top:230px;"><div class="mark"></div><div class="t">离开地点</div><div class="v"></div></div>
+</div>
+</div></div>
+<div class="spec">房间3×3 82×82@(58,44) | 图例132/147 | 房间列表158/182/206/230 | 〔规划 M4〕</div>
+</div>
+
+<div class="item">
+<div class="label">⑩ 设置</div>
+<div class="scr"><div class="panel"><div class="content">
+  <div class="txtblk f16 gold bold" style="left:0px; top:0px; width:100px;">设置</div>
+  <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">87%</div>
+  <div class="tab" style="left:0px; top:24px;">小屋</div>
+  <div class="tab" style="left:50px; top:24px;">村庄</div>
+  <div class="tab lock" style="left:100px; top:24px;">荒野</div>
+  <div class="tab on" style="left:150px; top:24px;">≡</div>
+  <div class="row focus" style="left:0px; top:52px;"><div class="mark">></div><div class="t">操作说明</div><div class="v">键位:三键</div></div>
+  <div class="row" style="left:0px; top:76px;"><div class="mark"></div><div class="t">按键音</div><div class="v">开</div></div>
+  <div class="row" style="left:0px; top:100px;"><div class="mark"></div><div class="t">重开本局</div><div class="v">需确认</div></div>
+  <div class="row" style="left:0px; top:124px;"><div class="mark"></div><div class="t">关于</div><div class="v">v0.2</div></div>
+  <div class="row" style="left:0px; top:148px;"><div class="mark"></div><div class="t">返回</div><div class="v"></div></div>
+</div>
+</div></div>
+<div class="spec">重开本局(确定/长按) → 确认页⑪</div>
+</div>
+
+<div class="item">
+<div class="label">⑪ 确认页(水平居中,垂直 60)</div>
+<div class="scr">
+<div class="veil"></div>
+<div class="dpanel" style="top:60px; width:196px; height:200px;">
+  <div class="txtblk f16 gold bold" style="left:0px; top:0px; width:120px;">确认操作</div>
+  <div class="txtf f16 text" style="left:0px; top:42px; width:176px; height:40px;">
+    确定重开本局?当前进度将丢失。
+  </div>
+  <div class="act focus" style="left:0px; top:130px;">
+    <div class="txt f16 text">确认执行</div>
+  </div>
+  <div class="act" style="left:0px; top:154px;">
+    <div class="txt f16 text">取消</div>
+  </div>
+</div></div>
+<div class="spec">全部卖出/重开共用 | 弹窗196×200@(22,60) 居中 | 正文176×40@42 | 确定/取消回原页</div>
+</div>
+
+<div class="item">
+<div class="label">⑫ 事件总表(原版 46 个)</div>
+<div class="scr"><div class="panel"><div class="content">
+  <div class="txtblk f16 gold bold" style="left:0px; top:0px; width:100px;">事件</div>
+  <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">87%</div>
+  <div class="txtf f12 text" style="left:0px; top:28px; width:198px; height:240px;">
+    <span class="gold">室内(10):</span>响动 乞丐 游牧民 可疑工匠<br>
+    师傅 侦察兵 病人 神秘流浪者 火灾 疾病<br>
+    <span class="gold">村庄(6):</span>陷阱损坏 野兽袭击 神秘流浪者<br>
+    乞丐 病人 流浪商人<br>
+    <span class="gold">遭遇(11):</span>嘶吼野兽 巨蜥 食人兽 怪鸟<br>
+    士兵 狙击手 憔悴男 拾荒者 野兽突袭<br>
+    军事突袭(降) 执行者<br>
+    <span class="gold">地点(13):</span>废墟城市 荒废小镇 老屋 前哨站<br>
+    铁矿 煤矿 硫磺矿 湿洞穴 沼泽 战场<br>
+    坠毁飞船(3层) 恐怖兽 双头怪<br>
+    <span class="gold">其他(6):</span>瘟疫 小偷 大孔洞 毁坏战舰 彭罗斯
+  </div>
+</div>
+</div></div>
+<div class="spec">开发对照清单,非游戏内界面 | 〔规划 M6 灌装〕</div>
+</div>
+
+<div class="item">
+<div class="label">⑬ 遭遇事件样例 · 嘶吼野兽</div>
+<div class="scr">
+<div class="veil"></div>
+<div class="dpanel" style="top:42px; width:196px; height:236px;">
+  <div class="txtf f16 text" style="left:0px; top:0px; width:176px; height:60px;">
+    黑暗中传来一声嘶吼。一头野兽盯上了你。
+  </div>
+  <div class="act focus" style="left:0px; top:116px;">
+    <div class="txt f16 text">拔剑迎战(战力4)</div>
+  </div>
+  <div class="act" style="left:0px; top:140px;">
+    <div class="txt f16 text">丢诱饵引开(饵1)</div>
+  </div>
+  <div class="act" style="left:0px; top:164px;">
+    <div class="txt f16 text">逃跑</div>
+  </div>
+</div></div>
+<div class="spec">选项底部锚定(末行164,向上堆叠) | 选中进战斗页 | 〔规划 M4〕</div>
+</div>
+
+<div class="item">
+<div class="label">⑭ 地点剧情样例 · 废墟城市</div>
+<div class="scr">
+<div class="veil"></div>
+<div class="dpanel" style="top:42px; width:196px; height:236px;">
+  <div class="txtf f16 text" style="left:0px; top:0px; width:176px; height:80px;">
+    一座烧毁的城市废墟静静立在荒野中,高楼只剩骨架。
+  </div>
+  <div class="act focus" style="left:0px; top:140px;">
+    <div class="txt f16 text">进城搜刮(水/食1)</div>
+  </div>
+  <div class="act" style="left:0px; top:164px;">
+    <div class="txt f16 text">绕开继续赶路</div>
+  </div>
+</div></div>
+<div class="spec">地点首次接近触发 | 进入后切⑨房间页 | 〔规划 M4〕</div>
+</div>
+
+</body>
+</html>

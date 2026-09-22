@@ -1,0 +1,12 @@
+test_dr_state
+test_dr_events
+*.exe
+test_dr_rules
+build/
+tools/sim/*.bmp
+*.log
+snap*.txt
+sim_f*.bmp
+sweep.bmp
+cap.bmp
+capB.bmp
