@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "dr_config.h"
@@ -27,7 +28,8 @@ typedef struct {
 
 // 运行态游戏数据(持久化的全部内容)。
 // 注意保持字段定宽(uint32/uint16/uint8 + 位域),不要用 bool/enum 直存以外的新类型;
-// 迁移函数按版本逐级补齐字段(见 dr_state_migrate)。
+// 新字段只允许尾插,历史布局冻结在 dr_state.c 的 dr_game_v1_t 等副本里,
+// 由 dr_state_load 逐版本迁移。
 typedef struct {
     // 时间:Unix 时间戳(秒)。进入 deep sleep 前写入;唤醒后 Δt = now - ts。
     uint32_t saved_at_ts;
@@ -57,6 +59,11 @@ typedef struct {
     uint8_t  hero_hp, hero_hp_max;
     uint8_t  in_wilderness;             // 0=在小屋,1=远征中
     uint8_t  water, food;               // 远征携带水/食
+
+    // 装备与偏好(v2 尾插;迁移见 dr_state_pack_v1/dr_state_load)。
+    uint8_t  armor_lv;                  // 护甲:0=无,1=皮甲(战斗减免 M4 接入)
+    uint8_t  trap_bait_on;              // 陷阱诱饵开关:查看陷阱时耗 1 饵多掷一次
+    uint8_t  _rsv[2];                   // 对齐预留,恒 0
 } dr_game_t;
 
 #pragma pack(push, 1)
@@ -72,14 +79,20 @@ void dr_game_init(dr_game_t *g, uint32_t seed, uint32_t now_ts);
 // 序列化:g → 镜像(填充头与 CRC)。
 void dr_state_pack(const dr_game_t *g, dr_save_image_t *img);
 
-// 反序列化:校验魔数/版本/CRC。返回 false 表示镜像损坏或版本未知。
-// 成功时 *out = 镜像中的 body(尚未迁移,调用方再按需 dr_state_migrate)。
+// 反序列化:校验魔数/版本/CRC(仅接受当前版本、当前尺寸的镜像)。
+// 历史(更短)镜像走 dr_state_load;返回 false 表示镜像损坏或版本不符。
+// 成功时 *out = 镜像中的 body。
 bool dr_state_unpack(const dr_save_image_t *img, dr_game_t *out,
                      uint16_t *out_version);
 
-// 迁移:把旧版本 body 就地升级到当前 DR_SAVE_VERSION。
-// 逐级 v→v+1:补零/换算字段。返回 false 表示版本太老无法处理(或太新)。
-bool dr_state_migrate(dr_game_t *g, uint16_t from_version);
+// 读档总入口(设备/主机通用):blob/len 为 NVS 里的原始字节,长度以实际存档
+// 为准——旧版本固件写的镜像更短,按“内容长度”验 CRC 后逐版本迁移到当前
+// dr_game_t。返回 false = 损坏/未知版本。升级固件不丢档靠这条路径。
+bool dr_state_load(const void *blob, size_t len, dr_game_t *out);
+
+// 主机测试用:把 g 中 v1 拥有的字段压成一张 v1 布局镜像(验证迁移)。
+// 返回写入字节数;缓冲不足返回 0。
+size_t dr_state_pack_v1(const dr_game_t *g, void *out, size_t outsz);
 
 // 离线结算(M2 起接产出表;M1 提供时间钳制口径):
 //   delta_s = now_ts - g->saved_at_ts

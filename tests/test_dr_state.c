@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "dr_rules.h"   // 仅用枚举常量(job/火焰档),不链接规则实现
 #include "dr_state.h"
 #include "dr_util.h"
 
@@ -104,12 +105,60 @@ static void test_crc_and_rng(void) {
     assert(hits > 4500 && hits < 5500);
 }
 
+static void test_v1_migration(void) {
+    // 用 v1 布局压一张镜像(模拟已发布 v1 固件写的 NVS 存档),再走 dr_state_load
+    dr_game_t g;
+    dr_game_init(&g, 4242, 1000);
+    g.res[DR_RES_WOOD] = 77;
+    g.res[DR_RES_FUR] = 12;
+    g.res_total[DR_RES_WOOD] = 300;
+    g.population = 5;
+    g.flags = 0x3;
+    g.building_lv[2] = 3;
+    g.job[DR_JOB_LUMBER] = 2;
+    g.fire_lv = DR_FIRE_BURNING;
+    // v1 没有的字段塞上"脏值":迁移后必须归零,证明新槽位是零填充而非穿帮
+    g.res[DR_RES_LEATHER] = 999;
+    g.res_total[DR_RES_LEATHER] = 999;
+    g.armor_lv = 1;
+    g.trap_bait_on = 1;
+
+    uint8_t blob[512];
+    size_t n = dr_state_pack_v1(&g, blob, sizeof(blob));
+    assert(n == sizeof(dr_save_hdr_t) + 460u);   // v1 镜像 = 头 12 + 体 460
+    dr_game_t out;
+    assert(dr_state_load(blob, n, &out));
+    assert(out.saved_at_ts == 1000);
+    assert(out.res[DR_RES_WOOD] == 77 && out.res[DR_RES_FUR] == 12);
+    assert(out.res_total[DR_RES_WOOD] == 300);
+    assert(out.population == 5 && out.flags == 0x3);
+    assert(out.building_lv[2] == 3 && out.job[DR_JOB_LUMBER] == 2);
+    assert(out.fire_lv == DR_FIRE_BURNING);
+    assert(out.res[DR_RES_LEATHER] == 0 && out.res_total[DR_RES_LEATHER] == 0);
+    assert(out.armor_lv == 0 && out.trap_bait_on == 0);
+
+    // 截断 / 篡改 / 垃圾头 → 拒绝(坏档不落进迁移路径)
+    assert(!dr_state_load(blob, n - 1, &out));
+    blob[sizeof(dr_save_hdr_t) + 8] ^= 0xFF;
+    assert(!dr_state_load(blob, n, &out));
+    assert(!dr_state_load("garbage!", 8, &out));
+    assert(!dr_state_load(NULL, n, &out));
+
+    // 当前版本镜像照常走 load(与 unpack 同口径)
+    dr_save_image_t img;
+    dr_state_pack(&g, &img);
+    dr_game_t cur;
+    assert(dr_state_load(&img, sizeof(img), &cur));
+    assert(memcmp(&g, &cur, sizeof(g)) == 0);
+}
+
 int main(void) {
     test_crc_and_rng();
     test_pack_roundtrip();
     test_corruption_detected();
     test_version_gate();
     test_offline_ticks();
+    test_v1_migration();
     printf("test_dr_state: all passed\n");
     return 0;
 }

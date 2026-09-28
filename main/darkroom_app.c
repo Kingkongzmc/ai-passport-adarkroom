@@ -88,6 +88,7 @@ static struct {
     int8_t village_adj;        // 村庄调节模式:在调的职业(-1=未调节)
     bool prev_gather_ready;    // 上一秒冷却是否已就绪(就绪瞬间触发重绘)
     bool prev_trap_ready;
+    bool prev_starving;        // 上一秒是否断粮罢工(转变瞬间记日志)
     dr_game_t game;
     dr_rules_rt_t rules_rt;
     dr_event_session_t ev_sess;
@@ -153,8 +154,8 @@ static const char *fire_char(void) {
 }
 
 static const char *bld_short(int id) {
-    static const char *n[] = {"板车", "陷阱", "小屋", "猎屋", "贸站"};
-    return (id >= 0 && id < 5) ? n[id] : "建筑";
+    static const char *n[] = {"板车", "陷阱", "小屋", "猎屋", "贸站", "革坊"};
+    return (id >= 0 && id < 6) ? n[id] : "建筑";
 }
 
 static lv_obj_t *label_new(lv_obj_t *parent, const lv_font_t *font,
@@ -496,7 +497,7 @@ static void render_cells(void) {
     lv_label_set_text_fmt(s_cells[4], "毛 %lu", (unsigned long)s.game.res[DR_RES_FUR]);
     lv_label_set_text_fmt(s_cells[5], "肉 %lu", (unsigned long)s.game.res[DR_RES_MEAT]);
     lv_label_set_text_fmt(s_cells[6], "诱 %lu", (unsigned long)s.game.res[DR_RES_BAIT]);
-    lv_label_set_text(s_cells[7], "");
+    lv_label_set_text_fmt(s_cells[7], "革 %lu", (unsigned long)s.game.res[DR_RES_LEATHER]);
 }
 
 // 主页日志:逐行标签,最新在上,旧条目颜色渐隐到背景(web 版 fade)。
@@ -727,10 +728,11 @@ static void render_build(void) {
     // 底部说明:光标所选建筑的作用
     static const char *bld_desc[] = {
         "解锁陷阱制作",             // 板车
-        "定期收获毛皮/肉/诱饵",     // 陷阱
+        "定期收获毛皮/肉",          // 陷阱
         "人口上限+2,流浪者入住",    // 小屋
         "解锁猎人职业",             // 猎人小屋
         "解锁贸易:毛/肉换木",       // 贸易站
+        "解锁制革匠:毛皮变皮革",    // 制革坊
     };
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(s_hint, 0, 230);
@@ -745,32 +747,43 @@ static void render_village(void) {
     uint16_t idle = dr_rules_job_idle(&s.game);
     char v[32];
     bool adj = (s.village_adj >= 0);
-    // 行0 伐木工 / 行1 猎人:OK 进入人数调节;行3 采集者 = 未分配人口(自动拾柴)
+    // 行0..2 职业可调(确定进入人数调节);行3 采集者 = 未分配人口(自动拾柴觅食)
     snprintf(v, sizeof(v), "%u人 +2木", s.game.job[DR_JOB_LUMBER]);
     set_row(0, 72, jobs[0], v, s.focus == 0, false);
     bool hunter_ok = dr_rules_job_unlocked(&s.game, DR_JOB_HUNTER);
-    if (hunter_ok) snprintf(v, sizeof(v), "%u人 +毛/肉", s.game.job[DR_JOB_HUNTER]);
-    else           snprintf(v, sizeof(v), "%u人 需猎人小屋", s.game.job[DR_JOB_HUNTER]);
+    if (hunter_ok) snprintf(v, sizeof(v), "%u人 +1毛2肉", s.game.job[DR_JOB_HUNTER]);
+    else           snprintf(v, sizeof(v), "需猎人小屋");
     set_row(1, 96, jobs[1], v, s.focus == 1, !hunter_ok);
-    set_row(2, 120, jobs[2], "未实装", s.focus == 2, true);
-    snprintf(v, sizeof(v), "%u人 +1木", idle);
+    bool tanner_ok = dr_rules_job_unlocked(&s.game, DR_JOB_TANNER);
+    if (tanner_ok) snprintf(v, sizeof(v), "%u人 2毛换1革", s.game.job[DR_JOB_TANNER]);
+    else           snprintf(v, sizeof(v), "需制革坊");
+    set_row(2, 120, jobs[2], v, s.focus == 2, !tanner_ok);
+    snprintf(v, sizeof(v), "%u人 +1木1食", idle);
     set_row(3, 144, jobs[3], v, s.focus == 3, false);
-    set_row(4, 168, jobs[4], "需铁匠铺", s.focus == 4, true);
+    set_row(4, 168, jobs[4], "需铁 M4", s.focus == 4, true);
     set_row(5, 192, adj ? "完成调节" : "返回", "", s.focus == 5, false);
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(s_hint, 0, 230);
     if (adj) {
         lv_label_set_text(s_hint, "上加 下减(长按=5) 确定=完成");
+    } else if (dr_rules_starving(&s.game)) {
+        lv_label_set_text(s_hint, "断粮罢工:村民只拾荒求生");
     } else {
-        // 收入总览:闲人+伐木工产木,猎人产毛/肉(每 10s 经济 tick)
-        uint32_t wood_rate = idle + (uint32_t)s.game.job[DR_JOB_LUMBER] * 2u;
+        // 收入总览(每 10s 经济 tick):产出 + 口粮消耗
         uint32_t hunter = s.game.job[DR_JOB_HUNTER];
-        char hbuf[48];
-        int n = snprintf(hbuf, sizeof(hbuf), "共%u人 每10s:木+%lu",
-                         s.game.population, (unsigned long)wood_rate);
-        if (hunter)
-            snprintf(hbuf + n, sizeof(hbuf) - n, " 毛+%lu 肉+%lu",
-                     (unsigned long)hunter, (unsigned long)hunter);
+        uint32_t tanner = s.game.job[DR_JOB_TANNER];
+        char hbuf[96];
+        int n = snprintf(hbuf, sizeof(hbuf), "共%u人/10s 木+%lu",
+                         s.game.population,
+                         (unsigned long)(idle + (uint32_t)s.game.job[DR_JOB_LUMBER] * 2u));
+        if (idle) n += snprintf(hbuf + n, sizeof(hbuf) - n, " 食+%lu",
+                                (unsigned long)idle);
+        if (hunter) n += snprintf(hbuf + n, sizeof(hbuf) - n, " 毛+%lu 肉+%lu",
+                                  (unsigned long)hunter,
+                                  (unsigned long)(hunter * DR_HUNTER_MEAT));
+        if (tanner) n += snprintf(hbuf + n, sizeof(hbuf) - n, " 革+%lu",
+                                  (unsigned long)tanner);
+        snprintf(hbuf + n, sizeof(hbuf) - n, " 粮耗-%u", s.game.population);
         lv_label_set_text(s_hint, hbuf);
     }
 }
@@ -878,7 +891,8 @@ static void render_combat(void) {
 
 static void render_trade(void) {
     render_topbar("贸易");
-    // 资源摘要单行 @24(mockup ⑧);列表行从 48 起,8 格带会与之重叠
+    // 资源摘要单行 @24(mockup ⑧);列表行从 48 起,8 格带会与之重叠。
+    // 第 4 格显示皮革:皮甲交易在本页最关心革存量。
     for (int i = 0; i < 4; i++) {
         cell_base(i, i * 49, 24);
         lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
@@ -887,13 +901,18 @@ static void render_trade(void) {
     lv_label_set_text_fmt(s_cells[0], "木 %lu", (unsigned long)s.game.res[DR_RES_WOOD]);
     lv_label_set_text_fmt(s_cells[1], "毛 %lu", (unsigned long)s.game.res[DR_RES_FUR]);
     lv_label_set_text_fmt(s_cells[2], "肉 %lu", (unsigned long)s.game.res[DR_RES_MEAT]);
-    lv_label_set_text_fmt(s_cells[3], "诱 %lu", (unsigned long)s.game.res[DR_RES_BAIT]);
+    lv_label_set_text_fmt(s_cells[3], "革 %lu", (unsigned long)s.game.res[DR_RES_LEATHER]);
     // 贸易站是商路前提:未建时交易行全部锁定
     bool post = s.game.building_lv[DR_BLD_TRADE_POST] > 0;
+    bool owned = s.game.armor_lv > 0;
+    char v[24];
+    if (owned) snprintf(v, sizeof(v), "已穿着");
+    else       snprintf(v, sizeof(v), "%u木%u革",
+                        (unsigned)DR_TRADE_ARMOR_WOOD, (unsigned)DR_TRADE_ARMOR_LEATHER);
     set_row(0, 48, "卖 毛皮×10", "得 50木", s.focus == 0, !post);
     set_row(1, 72, "卖 肉×10", "得 30木", s.focus == 1, !post);
     set_row(2, 96, "买 诱饵×5", "花 15木", s.focus == 2, !post);
-    set_row(3, 120, "买 皮甲", "100木", s.focus == 3, true);
+    set_row(3, 120, "买 皮甲", v, s.focus == 3, !post || owned);
     set_row(4, 144, "全部卖出", post ? "需确认" : "需贸易站", s.focus == 4, !post);
     set_row(5, 168, "返回", "", s.focus == 5, false);
 }
@@ -902,9 +921,9 @@ static void render_settings(void) {
     render_topbar("设置");
     render_tabs(3, s.game.population > 0, false, -1);
     set_row(0, 52, "操作说明", "键位:三键", s.focus == 0, false);
-    set_row(1, 76, "按键音", "开", s.focus == 1, false);
+    set_row(1, 76, "陷阱诱饵", s.game.trap_bait_on ? "开" : "关", s.focus == 1, false);
     set_row(2, 100, "重开本局", "需确认", s.focus == 2, false);
-    set_row(3, 124, "关于", "v0.2", s.focus == 3, false);
+    set_row(3, 124, "关于", "v0.3", s.focus == 3, false);
     set_row(4, 148, "返回", "", s.focus == 4, false);
 }
 
@@ -1025,7 +1044,8 @@ static bool row_enabled(int idx) {
         case PG_VILLAGE:
             if (idx == 5 || idx == 0 || idx == 3) return true;
             if (idx == 1) return dr_rules_job_unlocked(&s.game, DR_JOB_HUNTER);
-            return false;                               // 制革匠/铁匠 M3+
+            if (idx == 2) return dr_rules_job_unlocked(&s.game, DR_JOB_TANNER);
+            return false;                               // 铁匠 M4
         case PG_TRADE: {
             if (idx == 5) return true;
             if (s.game.building_lv[DR_BLD_TRADE_POST] == 0) return false;
@@ -1033,7 +1053,9 @@ static bool row_enabled(int idx) {
                 case 0: return s.game.res[DR_RES_FUR] >= 10;
                 case 1: return s.game.res[DR_RES_MEAT] >= 10;
                 case 2: return s.game.res[DR_RES_WOOD] >= 15;
-                case 3: return false;                   // 皮甲 M3+
+                case 3: return s.game.armor_lv == 0 &&
+                               s.game.res[DR_RES_WOOD] >= DR_TRADE_ARMOR_WOOD &&
+                               s.game.res[DR_RES_LEATHER] >= DR_TRADE_ARMOR_LEATHER;
                 default: return dr_rules_trade_sell_value(&s.game) > 0;
             }
         }
@@ -1075,14 +1097,20 @@ static void home_action(int idx) {
         return;
     }
     if (has_trap && idx == i++) {          // 查看陷阱
-        uint8_t got = dr_rules_trap_check(&s.rules_rt, &s.game, now_ms);
-        if (got == 0) log_push("陷阱空着,猎物没来");
-        else {
+        dr_trap_yield_t y;
+        if (!dr_rules_trap_check(&s.rules_rt, &s.game, now_ms, &y)) {
+            log_push("刚查过陷阱,再等等");
+        } else {
             char line[48];
-            snprintf(line, sizeof(line), "陷阱收获:%s%s%s",
-                     (got & DR_TRAP_GOT_FUR) ? "毛皮 " : "",
-                     (got & DR_TRAP_GOT_MEAT) ? "肉 " : "",
-                     (got & DR_TRAP_GOT_BAIT) ? "诱饵" : "");
+            int n = snprintf(line, sizeof(line), "陷阱收获:");
+            if (n > 0 && n < (int)sizeof(line)) {
+                if (y.fur)
+                    n += snprintf(line + n, sizeof(line) - n, " 毛皮×%u", y.fur);
+                if (n > 0 && n < (int)sizeof(line) && y.meat)
+                    n += snprintf(line + n, sizeof(line) - n, " 肉×%u", y.meat);
+                if (n > 0 && n < (int)sizeof(line) && y.bait)
+                    snprintf(line + n, sizeof(line) - n, "(耗%u饵)", y.bait);
+            }
             log_push(line);
             s.save_pending = true;
         }
@@ -1118,16 +1146,16 @@ static void list_action(int idx) {
             break;
         case PG_VILLAGE:
             if (idx == 5) page_goto(PG_HOME);
-            else if (idx == 0 || idx == 1) {
+            else if (idx == 0 || idx == 1 || idx == 2) {
                 if (!dr_rules_job_unlocked(&s.game, idx)) {
-                    log_push(idx == 1 ? "需先建猎人小屋" : "尚未开工");
+                    log_push(idx == 1 ? "需先建猎人小屋" : "需先建制革坊");
                 } else {
                     s.village_adj = (int8_t)idx;   // 进入人数调节
                     s.dirty = true;
                 }
             }
-            else if (idx == 3) log_push("闲着的人会自动拾柴");
-            else log_push("工作场所尚未建成");
+            else if (idx == 3) log_push("闲人自动拾柴觅食(+1木1食)");
+            else log_push("铁匠要等铁矿,M4 开工");
             break;
         case PG_MAP:
             if (idx == 2) page_goto(PG_HOME);
@@ -1151,6 +1179,17 @@ static void list_action(int idx) {
             if (idx == 0) done = dr_rules_trade_fur10(&s.game);
             else if (idx == 1) done = dr_rules_trade_meat10(&s.game);
             else if (idx == 2) done = dr_rules_trade_bait5(&s.game);
+            else if (idx == 3) {                       // 买皮甲:50木+10革
+                if (s.game.armor_lv > 0) log_push("已经穿着皮甲了");
+                else if (dr_rules_trade_armor(&s.game)) {
+                    log_push("买下皮甲,穿在身上(战斗减免 M4 生效)");
+                    s.save_pending = true;
+                } else {
+                    log_push(s.game.res[DR_RES_LEATHER] < DR_TRADE_ARMOR_LEATHER
+                                 ? "皮革不够(制革匠产革)" : "木头不够");
+                }
+                break;
+            }
             else if (idx == 4) {                       // 全部卖出:需确认
                 if (dr_rules_trade_sell_value(&s.game) == 0)
                     log_push("没有可卖的毛皮和肉");
@@ -1173,6 +1212,13 @@ static void list_action(int idx) {
         case PG_SETTINGS:
             if (idx == 4) page_goto(PG_HOME);
             else if (idx == 0) log_push("上/下选择 · 确定执行 · 长按返回");
+            else if (idx == 1) {                       // 陷阱诱饵开关
+                s.game.trap_bait_on = !s.game.trap_bait_on;
+                log_push(s.game.trap_bait_on
+                             ? "诱饵已备上:查看陷阱每陷阱多掷一件"
+                             : "诱饵已收起");
+                s.save_pending = true;
+            }
             else if (idx == 2) {                       // 重开本局:需确认
                 s.confirm_from = 0;
                 page_goto(PG_CONFIRM);
@@ -1275,6 +1321,15 @@ static void tick(lv_timer_t *t) {
             log_push("一位流浪者到来,住进了小屋");
             s.save_pending = true;
         }
+    }
+    // 断粮罢工的转变瞬间记日志(持续态由村庄页提示行展示)
+    bool starving = dr_rules_starving(&s.game);
+    if (starving != s.prev_starving) {
+        log_push(starving ? "粮食见底,村民停了活计"
+                          : "吃了顿饱饭,村里重新开工");
+        s.prev_starving = starving;
+        s.dirty = true;
+        s.save_pending = true;
     }
     if (s.page == PG_HOME) {
         check_event();
@@ -1467,22 +1522,24 @@ void darkroom_app_enter(void) {
     dr_event_session_init(&s.ev_sess);
     dr_rules_rt_init(&s.rules_rt, &s.game, (uint32_t)(esp_timer_get_time() / 1000));
 
-    // 离线结算:火焰熄灭 + 村庄产出 + 陷阱周期收获(读档才有间隔)
+    // 离线结算:火焰熄灭 + 村庄产出/口粮 + 陷阱周期收获(读档才有间隔)
     if (loaded) {
         dr_offline_yield_t oy;
         dr_rules_offline_settle(&s.rules_rt, &s.game, dr_port_now_ts(),
                                 (uint32_t)(esp_timer_get_time() / 1000), &oy);
-        if (oy.ticks || oy.fur || oy.meat || oy.bait || oy.fire_out) {
+        if (oy.ticks || oy.fur || oy.meat || oy.fire_out) {
             char line[64];
             snprintf(line, sizeof(line),
-                     "离线:木+%lu 毛+%lu 肉+%lu 饵+%lu",
+                     "离线:木+%lu 毛+%lu 肉+%lu 革+%lu",
                      (unsigned long)oy.wood, (unsigned long)oy.fur,
-                     (unsigned long)oy.meat, (unsigned long)oy.bait);
+                     (unsigned long)oy.meat, (unsigned long)oy.leather);
             log_push(line);
             if (oy.fire_out) log_push("回来时火已经熄了");
+            if (oy.starving) log_push("离线时断了粮,村民罢工了");
             s.save_pending = true;
         }
     }
+    s.prev_starving = dr_rules_starving(&s.game);
 
     build_ui();
     s_key_quit = false;

@@ -10,12 +10,14 @@ extern "C" {
 #endif
 
 // ---- 存档 ----
-#define DR_SAVE_VERSION   1u      // 存档结构版本,迁移见 dr_state.h
+#define DR_SAVE_VERSION   2u      // 存档结构版本,迁移见 dr_state.h
 #define DR_SAVE_NVS_KEY   "dr_save"
 #define DR_FLAG_BITS      64      // 剧情标记位数(事件表引用 0..63)
 
 // ---- 资源 ----
 // M1 引擎层先定义全量资源槽位;各资源的解锁与产出规则在数值表(M3+)灌装。
+// 布局红线:只能在尾部追加,不得在中间插入——res[]/res_total[] 按枚举下标
+// 落盘,插入会改写历史存档的字段含义(v2 追加皮革即遵守此规)。
 typedef enum {
     DR_RES_WOOD = 0,      // 木材
     DR_RES_FUR,           // 毛皮
@@ -30,8 +32,18 @@ typedef enum {
     DR_RES_BULLETS,       // 子弹
     DR_RES_ALIEN,         // 异星金属
     DR_RES_CHARM,         // 护符
+    DR_RES_LEATHER,       // 皮革(v2 尾插;制革匠产出,皮甲原料)
     DR_RES_KIND_COUNT,
 } dr_res_t;
+
+// ---- 村庄口粮(M3) ----
+// 每人每经济 tick 吃 1 口粮:先扣食物(DR_RES_FOOD),不足再扣肉;
+// 两皆空 → 全村罢工(职业停工,闲人仍拾荒求生),不死亡。口径见 GAMEPLAY §3。
+#define DR_FOOD_PER_VILLAGER  1u
+
+// ---- 皮甲(M3;战斗减免 M4 接入) ----
+#define DR_TRADE_ARMOR_WOOD     50u
+#define DR_TRADE_ARMOR_LEATHER  10u
 
 // ---- 建筑(全量槽位;名称与造价在 M2 起的数值表里) ----
 #define DR_BUILDING_KINDS  40

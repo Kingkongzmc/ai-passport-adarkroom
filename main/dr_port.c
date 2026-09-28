@@ -54,28 +54,32 @@ int dr_port_load(dr_game_t *g, bool *out_loaded, uint32_t *out_offline_ticks) {
     if (err != ESP_OK) return (int)err;
 
     dr_save_image_t img;
+    memset(&img, 0, sizeof(img));
     size_t len = sizeof(img);
     err = nvs_get_blob(h, DR_SAVE_NVS_KEY, &img, &len);
     nvs_close(h);
     if (err == ESP_ERR_NVS_NOT_FOUND) return 0;
-    if (err != ESP_OK || len != sizeof(img)) {
-        ESP_LOGE(TAG, "读档失败(len=%u):%s", (unsigned)len, esp_err_to_name(err));
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "读档失败:%s", esp_err_to_name(err));
         return 0;  // 坏档:按空档处理,游戏可开新局
+    }
+    // 长度以实际存档为准:旧版本固件写的镜像更短,拒绝"长度不符=坏档"
+    // (那会把升级用户的存档误杀)。dr_state_load 内部按内容长度验 CRC
+    // 并逐版本迁移,v1 存档升级到 v2 后原班数据继续用。
+    if (len < sizeof(dr_save_hdr_t) || len > sizeof(img)) {
+        ESP_LOGE(TAG, "存档长度异常(%u),开新档", (unsigned)len);
+        return 0;
     }
 
     dr_game_t body;
-    uint16_t ver = 0;
-    if (!dr_state_unpack(&img, &body, &ver)) {
+    if (!dr_state_load(&img, len, &body)) {
         ESP_LOGW(TAG, "存档校验失败(CRC/版本),开新档");
-        return 0;
-    }
-    if (!dr_state_migrate(&body, ver)) {
-        ESP_LOGW(TAG, "存档版本 %u 无法迁移,开新档", ver);
         return 0;
     }
     *out_loaded = true;
     *out_offline_ticks = dr_offline_ticks(&body, dr_port_now_ts());
     *g = body;
-    ESP_LOGI(TAG, "读档成功 v%u,离线结算 %u tick", ver, *out_offline_ticks);
+    ESP_LOGI(TAG, "读档成功(len=%u,当前结构 v%u),离线结算 %u tick",
+             (unsigned)len, (unsigned)DR_SAVE_VERSION, *out_offline_ticks);
     return 0;
 }
