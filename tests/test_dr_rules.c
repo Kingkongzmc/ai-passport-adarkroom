@@ -362,8 +362,9 @@ static void test_offline_settle(void) {
     dr_rules_rt_t rt;
     dr_rules_rt_init(&rt, &g, 0);
 
-    // 时钟回拨:不结算
+    // 时钟回拨:不结算,且锚点拉平到当下(防止回拨期反复判负)
     assert(dr_rules_offline_settle(&rt, &g, 99999, 0, 0) == 0);
+    assert(g.saved_at_ts == 99999);
 
     // 离线 600s:60 经济 tick;火熄;陷阱 20 个周期 × Lv1 必得 = 恰好 20 件
     dr_offline_yield_t y;

@@ -89,6 +89,7 @@ static struct {
     bool prev_gather_ready;    // 上一秒冷却是否已就绪(就绪瞬间触发重绘)
     bool prev_trap_ready;
     bool prev_starving;        // 上一秒是否断粮罢工(转变瞬间记日志)
+    uint32_t autosave_ms;      // 周期存档基准(挂机产出也落盘,断电回滚≤1分钟)
     dr_game_t game;
     dr_rules_rt_t rules_rt;
     dr_event_session_t ev_sess;
@@ -1346,6 +1347,13 @@ static void tick(lv_timer_t *t) {
         s.prev_gather_ready = (g_rem <= 0);
         s.prev_trap_ready = t_has && (t_rem <= 0);
     }
+    // 周期存档:纯挂机时经济 tick 的产出也落盘(与按键/渲染同在 LVGL
+    // 线程,天然与状态变更互斥;NVS 写入约毫秒级,每分钟一次可接受)
+    if (now_ms - s.autosave_ms >= 60000u) {
+        s.autosave_ms = now_ms;
+        dr_port_save(&s.game);
+    }
+
     render();
 }
 
@@ -1509,9 +1517,7 @@ void darkroom_app_enter(void) {
 
     dr_port_storage_init();
     bool loaded = false;
-    uint32_t offline_ticks = 0;   // 兼容端口签名;结算改走 dr_rules_offline_settle
-    (void)offline_ticks;
-    dr_port_load(&s.game, &loaded, &offline_ticks);
+    dr_port_load(&s.game, &loaded);
     if (!loaded) {
         uint32_t seed = (uint32_t)esp_timer_get_time() ^ 0x5EED;
         dr_game_init(&s.game, seed, dr_port_now_ts());
@@ -1527,16 +1533,19 @@ void darkroom_app_enter(void) {
         dr_offline_yield_t oy;
         dr_rules_offline_settle(&s.rules_rt, &s.game, dr_port_now_ts(),
                                 (uint32_t)(esp_timer_get_time() / 1000), &oy);
-        if (oy.ticks || oy.fur || oy.meat || oy.fire_out) {
-            char line[64];
-            snprintf(line, sizeof(line),
-                     "离线:木+%lu 毛+%lu 肉+%lu 革+%lu",
-                     (unsigned long)oy.wood, (unsigned long)oy.fur,
-                     (unsigned long)oy.meat, (unsigned long)oy.leather);
-            log_push(line);
+        if (oy.ticks) {
+            // 锚点已被结算推进,立刻落盘——否则断电会让同一离线窗口重复结算
+            s.save_pending = true;
+            if (oy.wood || oy.fur || oy.meat || oy.leather) {
+                char line[64];
+                snprintf(line, sizeof(line),
+                         "离线:木+%lu 毛+%lu 肉+%lu 革+%lu",
+                         (unsigned long)oy.wood, (unsigned long)oy.fur,
+                         (unsigned long)oy.meat, (unsigned long)oy.leather);
+                log_push(line);
+            }
             if (oy.fire_out) log_push("回来时火已经熄了");
             if (oy.starving) log_push("离线时断了粮,村民罢工了");
-            s.save_pending = true;
         }
     }
     s.prev_starving = dr_rules_starving(&s.game);

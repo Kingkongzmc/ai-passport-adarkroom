@@ -121,8 +121,9 @@ bool dr_rules_build(dr_game_t *g, uint8_t building_id, uint32_t now_ts) {
 }
 
 void dr_rules_rt_init(dr_rules_rt_t *rt, dr_game_t *g, uint32_t now_ms) {
-    // 无条件从档内种子派生:存档时 rng 已回写,重启后从断点续读同一序列
-    dr_rng_seed(&rt->rng, g->rng_seed_state ^ 0xA5A5A5A5u);
+    // 从档内 RNG 状态直接续跑:trap_check 每次结算把推进后的状态回写档,
+    // 重启后严格续读同一序列(事件触发会改写该状态,属正常扰动)。
+    dr_rng_seed(&rt->rng, g->rng_seed_state);
     rt->rng_inited = true;
     rt->fire_deadline_ms = now_ms + DR_FIRE_LEVEL_SECONDS * 1000u;
     rt->gather_ready_ms = now_ms;
@@ -299,7 +300,11 @@ uint32_t dr_rules_offline_settle(dr_rules_rt_t *rt, dr_game_t *g,
     (void)now_ms;   // rt 各计时基准已由 rt_init 按 now_ms 归位
     dr_offline_yield_t zero = {0, 0, 0, 0, 0, 0, false, false};
     if (y) *y = zero;
-    if (now_ts_s <= g->saved_at_ts) return 0;   // 时钟回拨/无间隔:不结算
+    if (now_ts_s < g->saved_at_ts) {          // 时钟回拨(RTC 丢失):锚定当下
+        g->saved_at_ts = now_ts_s;            // 不结算,防止回拨期反复判负
+        return 0;
+    }
+    if (now_ts_s == g->saved_at_ts) return 0; // 无间隔
     uint32_t delta_s = now_ts_s - g->saved_at_ts;
 
     // 火焰:离线即熄(计时基准不落盘)

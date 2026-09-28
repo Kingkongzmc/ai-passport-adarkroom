@@ -76,21 +76,37 @@ void vTaskDelete(void *t) { (void)t; /* 模拟器进程随 main 退出 */ }
 void vTaskDelay(TickType_t ms) { usleep((useconds_t)ms * 1000); }
 
 // ---------------------------------------------------------------------------
-// dr_port 桩:存档留在内存,时间用虚拟时钟
+// dr_port 桩:时间用虚拟时钟;默认内存档(每次运行开新档,脚本可重放)。
+// SIM_PERSIST=1 时存档落盘 sim_dr_save.bin,配合 SIM_START_TS=<秒>
+// 可做跨进程回归:进程 A 存档退出,进程 B 把虚拟时钟拨到未来重启,
+// 验证"读档→离线结算"链路(设备端曾因读档消费离线间隔而整链失效)。
 // ---------------------------------------------------------------------------
 static dr_save_image_t s_save_img;
-static bool s_save_loaded;
+static bool s_save_persist;
 int dr_port_storage_init(void) { return 0; }
 uint32_t dr_port_now_ts(void) { return (uint32_t)(s_vtime_us / 1000000); }
 int dr_port_save(const dr_game_t *g) {
     dr_state_pack(g, &s_save_img);
-    s_save_loaded = true;
+    if (!s_save_persist) return 0;
+    FILE *f = fopen("sim_dr_save.bin", "wb");
+    if (!f) return -1;
+    fwrite(&s_save_img, 1, sizeof(s_save_img), f);
+    fclose(f);
     return 0;
 }
-int dr_port_load(dr_game_t *g, bool *out_loaded, uint32_t *out_ticks) {
-    *out_loaded = false; *out_ticks = 0;
-    if (!s_save_loaded) return 0;         // 每次运行都开新档
-    // 读回上次内存档但离线按 0 计,便于脚本重放
+int dr_port_load(dr_game_t *g, bool *out_loaded) {
+    *out_loaded = false;
+    if (s_save_persist) {
+        FILE *f = fopen("sim_dr_save.bin", "rb");
+        if (!f) return 0;                       // 首次运行:空档
+        uint8_t buf[sizeof(dr_save_image_t)];
+        size_t n = fread(buf, 1, sizeof(buf), f);
+        fclose(f);
+        if (n >= sizeof(dr_save_hdr_t) && dr_state_load(buf, n, g))
+            *out_loaded = true;
+        return 0;
+    }
+    // 内存档:同进程内 enter 只跑一次,这里实际永不命中,保底原样
     uint16_t ver;
     if (dr_state_unpack(&s_save_img, g, &ver)) *out_loaded = true;
     return 0;
@@ -166,6 +182,10 @@ int main(int argc, char **argv) {
     int frames = argc > 2 ? atoi(argv[2]) : 100;
     const char *bmp = argc > 3 ? argv[3] : "sim_dark.bmp";
     if (keyspec) parse_keys(keyspec);
+    s_save_persist = getenv("SIM_PERSIST") != NULL;
+    char *start_ts = getenv("SIM_START_TS");
+    if (start_ts && atoll(start_ts) > 0)
+        s_vtime_us = atoll(start_ts) * 1000000;  // 把虚拟时钟拨到指定 Unix 秒
 
     lv_init();
     lv_display_t *disp = lv_display_create(SIM_W, SIM_H);

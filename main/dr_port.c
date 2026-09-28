@@ -44,9 +44,8 @@ int dr_port_save(const dr_game_t *g) {
     return (int)err;
 }
 
-int dr_port_load(dr_game_t *g, bool *out_loaded, uint32_t *out_offline_ticks) {
+int dr_port_load(dr_game_t *g, bool *out_loaded) {
     *out_loaded = false;
-    *out_offline_ticks = 0;
 
     nvs_handle_t h;
     esp_err_t err = nvs_open("darkroom", NVS_READONLY, &h);
@@ -76,10 +75,12 @@ int dr_port_load(dr_game_t *g, bool *out_loaded, uint32_t *out_offline_ticks) {
         ESP_LOGW(TAG, "存档校验失败(CRC/版本),开新档");
         return 0;
     }
+    // 纯读取:saved_at_ts 原样带出,离线间隔由 dr_rules_offline_settle
+    // 消费(此前这里顺手调 dr_offline_ticks 把锚点推到当下,结算看到
+    // Δt=0 直接早退——真机离线收益从未生效,v1 带病)。
     *out_loaded = true;
-    *out_offline_ticks = dr_offline_ticks(&body, dr_port_now_ts());
     *g = body;
-    ESP_LOGI(TAG, "读档成功(len=%u,当前结构 v%u),离线结算 %u tick",
-             (unsigned)len, (unsigned)DR_SAVE_VERSION, *out_offline_ticks);
+    ESP_LOGI(TAG, "读档成功(len=%u,当前结构 v%u)",
+             (unsigned)len, (unsigned)DR_SAVE_VERSION);
     return 0;
 }

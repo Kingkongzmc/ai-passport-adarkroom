@@ -84,6 +84,22 @@ static void test_offline_ticks(void) {
     assert(dr_offline_ticks(&g, now + 30) == 8);
 }
 
+static void test_load_is_side_effect_free(void) {
+    // 回归(v1.1 修复):读档必须是纯读取,不得推进 saved_at_ts——
+    // 离线间隔只能由 dr_rules_offline_settle 独占消费。设备端 dr_port_load
+    // 曾在此顺手结算,导致后续 settle 看到 Δt=0 直接早退,真机离线收益
+    // 从未生效(模拟器垫片与主机测试都绕开了设备胶水层,故全绿带病)。
+    dr_game_t g, out;
+    dr_game_init(&g, 7, 100000);
+    dr_save_image_t img;
+    dr_state_pack(&g, &img);
+
+    assert(dr_state_load(&img, sizeof(img), &out));
+    assert(out.saved_at_ts == 100000);            // 读档不动锚点
+    assert(dr_offline_ticks(&out, 100600) == 60); // 间隔仍完整可结算
+    assert(out.saved_at_ts == 100600);            // 结算方才推进锚点
+}
+
 static void test_crc_and_rng(void) {
     // CRC-32 已知向量:"123456789" → 0xCBF43926
     assert(dr_crc32("123456789", 9) == 0xCBF43926u);
@@ -158,6 +174,7 @@ int main(void) {
     test_corruption_detected();
     test_version_gate();
     test_offline_ticks();
+    test_load_is_side_effect_free();
     test_v1_migration();
     printf("test_dr_state: all passed\n");
     return 0;
