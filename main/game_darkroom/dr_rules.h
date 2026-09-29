@@ -27,6 +27,8 @@ typedef enum {
     DR_BLD_TRADE_POST,  // 贸易站:max1,400木+100毛;解锁游牧商人(只买不卖)
     DR_BLD_TANNERY,     // 制革坊:max1,500木+50毛;解锁制革匠
     DR_BLD_SMOKEHOUSE,  // 熏肉房:max1,600木+50肉;解锁熏肉匠(v3 尾插)
+    DR_BLD_STEELWORKS,  // 炼钢厂:max1,1500木+100铁+100煤;解锁炼钢工(v4 尾插)
+    DR_BLD_ARMOURY,     // 军械库:max1,3000木+100钢+50硫;解锁军械工
     DR_BLD_KIND_COUNT,
 } dr_building_t;
 
@@ -84,8 +86,8 @@ typedef enum {
 
 // ---- 建造 ----
 typedef struct {
-    uint32_t wood;              // 0xFFFFFFFF = 不可建
-    uint32_t fur, meat;
+    uint32_t wood;              // 0xFFFFFFFF = 不可建(满级/未实装)
+    uint32_t fur, meat, iron, coal, steel, sulphur;   // 组件造价(原版口径)
 } dr_bld_cost_t;
 dr_bld_cost_t dr_building_cost(uint8_t building_id, uint8_t current_lv);
 
@@ -142,7 +144,13 @@ typedef enum {
     DR_JOB_TRAPPER,       // 捕兽人(需猎人小屋):−1 肉 → +1 饵/10s·人
     DR_JOB_TANNER,        // 制革匠(需制革坊):−5 毛 → +1 革/10s·人
     DR_JOB_CHARCUTIER,    // 熏肉匠(需熏肉房):−5 肉 −5 木 → +1 干肉/10s·人
-    DR_JOB_KIND_COUNT,    // M4 尾插:铁矿工/煤矿工/硫磺矿工/炼钢工/军械工
+    // M4(v4 尾插):矿工吃干肉产矿——到访对应矿并回家后解锁(原版 checkWorker)
+    DR_JOB_IRON_MINER,    // 铁矿工:−1 干肉 → +1 铁/10s·人
+    DR_JOB_COAL_MINER,    // 煤矿工:−1 干肉 → +1 煤/10s·人
+    DR_JOB_SULPHUR_MINER, // 硫磺矿工:−1 干肉 → +1 硫/10s·人
+    DR_JOB_STEELWORKER,   // 炼钢工(需炼钢厂):−1 铁 −1 煤 → +1 钢/10s·人
+    DR_JOB_ARMOURER,      // 军械工(需军械库):−1 钢 −1 硫 → +1 子弹/10s·人
+    DR_JOB_KIND_COUNT,
 } dr_job_t;
 // 采集者 = 未分配人口,+1 木/10s·人(原版 gatherer,无口粮系统——村民不吃东西)。
 uint16_t dr_rules_job_idle(const dr_game_t *g);

@@ -7,6 +7,7 @@ idf_component_register(
          "dr_port.c"
          "game_darkroom/dr_rules.c"
          "game_darkroom/dr_state.c"
+         "game_darkroom/dr_world.c"
          "game_darkroom/dr_events.c"
          "game_darkroom/dr_events_data.c"
          "game_darkroom/dr_text.c"

@@ -10,7 +10,7 @@
 static const uint32_t DR_COST_MAX = 0xFFFFFFFFu;
 
 dr_bld_cost_t dr_building_cost(uint8_t building_id, uint8_t lv) {
-    dr_bld_cost_t c = { 0, 0, 0 };
+    dr_bld_cost_t c = {0, 0, 0, 0, 0, 0, 0};
     switch ((dr_building_t)building_id) {
         case DR_BLD_CART:       // max 1
             c.wood = (lv >= 1) ? DR_COST_MAX : 30u;
@@ -37,8 +37,16 @@ dr_bld_cost_t dr_building_cost(uint8_t building_id, uint8_t lv) {
             if (lv >= 1) { c.wood = DR_COST_MAX; break; }
             c.wood = 600u; c.meat = 50u;
             break;
+        case DR_BLD_STEELWORKS: // max 1:1500 木 + 100 铁 + 100 煤
+            if (lv >= 1) { c.wood = DR_COST_MAX; break; }
+            c.wood = 1500u; c.iron = 100u; c.coal = 100u;
+            break;
+        case DR_BLD_ARMOURY:    // max 1:3000 木 + 100 钢 + 50 硫
+            if (lv >= 1) { c.wood = DR_COST_MAX; break; }
+            c.wood = 3000u; c.steel = 100u; c.sulphur = 50u;
+            break;
         default:
-            c.wood = DR_COST_MAX;  // 未实装槽位(M4:工坊/炼钢厂/军械库)
+            c.wood = DR_COST_MAX;  // 未实装槽位(切片三:工坊)
             break;
     }
     return c;
@@ -63,6 +71,10 @@ bool dr_rules_can_build(const dr_game_t *g, uint8_t building_id) {
     if (g->res[DR_RES_WOOD] * 2u < cost.wood) return false;
     if (cost.fur > 0 && g->res[DR_RES_FUR] == 0) return false;
     if (cost.meat > 0 && g->res[DR_RES_MEAT] == 0) return false;
+    if (cost.iron > 0 && g->res[DR_RES_IRON] == 0) return false;
+    if (cost.coal > 0 && g->res[DR_RES_COAL] == 0) return false;
+    if (cost.steel > 0 && g->res[DR_RES_STEEL] == 0) return false;
+    if (cost.sulphur > 0 && g->res[DR_RES_SULPHUR] == 0) return false;
     return true;
 }
 
@@ -100,9 +112,17 @@ bool dr_rules_build(dr_game_t *g, uint8_t building_id, uint32_t now_ts) {
     if (g->res[DR_RES_WOOD] < cost.wood) return false;
     if (g->res[DR_RES_FUR] < cost.fur) return false;
     if (g->res[DR_RES_MEAT] < cost.meat) return false;
+    if (g->res[DR_RES_IRON] < cost.iron) return false;
+    if (g->res[DR_RES_COAL] < cost.coal) return false;
+    if (g->res[DR_RES_STEEL] < cost.steel) return false;
+    if (g->res[DR_RES_SULPHUR] < cost.sulphur) return false;
     g->res[DR_RES_WOOD] -= cost.wood;
     g->res[DR_RES_FUR] -= cost.fur;
     g->res[DR_RES_MEAT] -= cost.meat;
+    g->res[DR_RES_IRON] -= cost.iron;
+    g->res[DR_RES_COAL] -= cost.coal;
+    g->res[DR_RES_STEEL] -= cost.steel;
+    g->res[DR_RES_SULPHUR] -= cost.sulphur;
     g->building_lv[building_id] = lv + 1;
     return true;   // 原版建房不加人口,人口只来自流浪者到达
 }
@@ -154,8 +174,18 @@ bool dr_rules_job_unlocked(const dr_game_t *g, uint8_t job) {
             return g->building_lv[DR_BLD_TANNERY] > 0;
         case DR_JOB_CHARCUTIER:
             return g->building_lv[DR_BLD_SMOKEHOUSE] > 0;
+        case DR_JOB_IRON_MINER:     // 到访矿并回家(原版 checkWorker 挂矿建筑)
+            return (g->flags & ((uint64_t)1u << DR_FLAG_IRON_MINE)) != 0;
+        case DR_JOB_COAL_MINER:
+            return (g->flags & ((uint64_t)1u << DR_FLAG_COAL_MINE)) != 0;
+        case DR_JOB_SULPHUR_MINER:
+            return (g->flags & ((uint64_t)1u << DR_FLAG_SULPHUR_MINE)) != 0;
+        case DR_JOB_STEELWORKER:
+            return g->building_lv[DR_BLD_STEELWORKS] > 0;
+        case DR_JOB_ARMOURER:
+            return g->building_lv[DR_BLD_ARMOURY] > 0;
         default:
-            return false;   // 矿工/炼钢/军械:M4(铁经济在荒野)
+            return false;
     }
 }
 
@@ -196,6 +226,37 @@ static void income_step(dr_rules_rt_t *rt, dr_game_t *g, dr_income_out_t *out) {
     g->res[DR_RES_MEAT] -= conv;
     g->res[DR_RES_BAIT] += conv;
     g->res_total[DR_RES_BAIT] += conv;
+    // 矿工链(原版:−1 干肉 → +1 矿/10s·人;干肉不够空转)
+    uint32_t cured = g->res[DR_RES_FOOD];
+    struct { uint8_t job; uint8_t res; } miners[3] = {
+        { DR_JOB_IRON_MINER, DR_RES_IRON },
+        { DR_JOB_COAL_MINER, DR_RES_COAL },
+        { DR_JOB_SULPHUR_MINER, DR_RES_SULPHUR },
+    };
+    for (int i = 0; i < 3; i++) {
+        uint32_t n = g->job[miners[i].job];
+        if (n > cured) n = cured;
+        cured -= n;
+        g->res[DR_RES_FOOD] -= n;
+        g->res[miners[i].res] += n;
+        g->res_total[miners[i].res] += n;
+    }
+    // 炼钢工 −1 铁 −1 煤 → +1 钢
+    for (uint16_t i = 0; i < g->job[DR_JOB_STEELWORKER] &&
+                         g->res[DR_RES_IRON] >= 1u && g->res[DR_RES_COAL] >= 1u; i++) {
+        g->res[DR_RES_IRON] -= 1;
+        g->res[DR_RES_COAL] -= 1;
+        g->res[DR_RES_STEEL] += 1;
+        g->res_total[DR_RES_STEEL] += 1;
+    }
+    // 军械工 −1 钢 −1 硫 → +1 子弹
+    for (uint16_t i = 0; i < g->job[DR_JOB_ARMOURER] &&
+                         g->res[DR_RES_STEEL] >= 1u && g->res[DR_RES_SULPHUR] >= 1u; i++) {
+        g->res[DR_RES_STEEL] -= 1;
+        g->res[DR_RES_SULPHUR] -= 1;
+        g->res[DR_RES_BULLETS] += 1;
+        g->res_total[DR_RES_BULLETS] += 1;
+    }
     // 制革匠 −5 毛 → +1 革
     for (uint16_t i = 0; i < g->job[DR_JOB_TANNER] &&
                          g->res[DR_RES_FUR] >= 5u; i++) {

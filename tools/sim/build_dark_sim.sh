@@ -8,6 +8,7 @@ gcc -g -O0 -DLV_CONF_INCLUDE_SIMPLE \
     $(find managed_components/lvgl__lvgl/src -name '*.c') \
     main/darkroom_app.c \
     main/game_darkroom/dr_rules.c main/game_darkroom/dr_state.c \
+    main/game_darkroom/dr_world.c \
     main/game_darkroom/dr_events.c main/game_darkroom/dr_events_data.c \
     main/game_darkroom/dr_text.c main/game_darkroom/dr_util.c \
     assets/fonts/dr_font_12.c assets/fonts/dr_font_16.c assets/fonts/dr_font_24.c \

@@ -17,9 +17,12 @@ echo "== build =="
     "$SRC/dr_events_data.c" "$SRC/dr_text.c" "$SRC/dr_state.c" "$SRC/dr_util.c"
 "$CC" $CFLAGS -o test_dr_rules test_dr_rules.c "$SRC/dr_rules.c" \
     "$SRC/dr_state.c" "$SRC/dr_util.c"
+"$CC" $CFLAGS -o test_dr_world test_dr_world.c "$SRC/dr_world.c" \
+    "$SRC/dr_rules.c" "$SRC/dr_state.c" "$SRC/dr_util.c"
 
 echo "== run =="
 ./test_dr_state
 ./test_dr_events
 ./test_dr_rules
+./test_dr_world
 echo "all host tests passed"

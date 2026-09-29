@@ -30,6 +30,7 @@
 #include "dr_port.h"
 #include "dr_text.h"
 #include "dr_util.h"
+#include "dr_world.h"
 #include "lvgl.h"
 
 #include "esp_log.h"
@@ -90,6 +91,7 @@ static struct {
     bool prev_trap_ready;
     bool prev_stoke_active;    // 主页添柴冷却条活动态(结束瞬间也要重绘一次)
     uint32_t autosave_ms;      // 周期存档基准(挂机产出也落盘,断电回滚≤1分钟)
+    uint32_t embark_cd_ms;     // 出发冷却到期时刻(死亡后 120s,原版口径)
     dr_game_t game;
     dr_rules_rt_t rules_rt;
     dr_event_session_t ev_sess;
@@ -116,8 +118,9 @@ static actrow_t s_acts[ACT_ROWS];
 typedef struct {
     lv_obj_t *row, *mark, *t, *v;
 } listrow_t;
-#define LIST_ROWS 9
+#define LIST_ROWS 10
 static listrow_t s_list[LIST_ROWS];
+static dr_world_t s_world;   // 世界与远征运行态(会话内;种子派生,不落盘)
 // 弹窗层
 static lv_obj_t *s_veil, *s_dpanel, *s_dtitle, *s_dbody;
 static actrow_t s_dacts[4];
@@ -203,13 +206,15 @@ static const char *fire_char(void) {
 }
 
 static const char *bld_short(int id) {
-    static const char *n[] = {"板车", "陷阱", "小屋", "猎屋", "贸站", "革坊", "熏房"};
-    return (id >= 0 && id < 7) ? n[id] : "建筑";
+    static const char *n[] = {"板车", "陷阱", "小屋", "猎屋", "贸站", "革坊",
+                              "熏房", "钢厂", "械库"};
+    return (id >= 0 && id < 9) ? n[id] : "建筑";
 }
 
 // 村庄页签门:森林剧情解锁(原版 unlockForest)
 static bool forest_open(void);
 static bool build_affordable(uint8_t id);   // 建造行足额可付判定
+static bool nav_tab_enabled(int i);         // 页签启用表(荒野门)
 
 // 第二页签名(原版 a silent forest → village):建小屋前是"森林",之后是"村庄"
 static const char *outside_name(void) {
@@ -680,7 +685,7 @@ static int stoke_pct(uint32_t now_ms) {
 
 static void render_home(uint32_t now_ms) {
     render_topbar("小黑屋");
-    render_tabs(0, forest_open(), false, s.nav_focus);
+    render_tabs(0, forest_open(), nav_tab_enabled(2), s.nav_focus);
     render_cells();
     lv_obj_add_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
 
@@ -715,6 +720,19 @@ static void render_home(uint32_t now_ms) {
     for (int i = 0; i < n; i++) lv_obj_clear_flag(s_acts[i].row, LV_OBJ_FLAG_HIDDEN);
 }
 
+// 造价组件取值(建造页展示用;组件表见 render_build)
+static uint32_t bld_comp_cost(uint8_t res, const dr_bld_cost_t *c) {
+    switch (res) {
+        case DR_RES_FUR:      return c->fur;
+        case DR_RES_MEAT:     return c->meat;
+        case DR_RES_IRON:     return c->iron;
+        case DR_RES_COAL:     return c->coal;
+        case DR_RES_STEEL:    return c->steel;
+        case DR_RES_SULPHUR:  return c->sulphur;
+        default:              return 0;
+    }
+}
+
 static void render_build(void) {
     render_topbar("建造");
     // 资源摘要单行 @28:木/毛/肉/诱
@@ -730,55 +748,48 @@ static void render_build(void) {
     for (int i = 0; i < LOG_VIS; i++) lv_obj_add_flag(s_loglines[i], LV_OBJ_FLAG_HIDDEN);
     // 列表 8 建筑 + 返回,行距 23 从 52 起
     for (int i = 0; i < DR_BLD_KIND_COUNT; i++) {
+        static const struct { uint8_t res; const char *label; } k_comps[] = {
+            { DR_RES_FUR, "毛" },   { DR_RES_MEAT, "肉" },
+            { DR_RES_IRON, "铁" },  { DR_RES_COAL, "煤" },
+            { DR_RES_STEEL, "钢" }, { DR_RES_SULPHUR, "硫" },
+        };
         uint8_t lv = s.game.building_lv[i];
         bool can = dr_rules_can_build(&s.game, i);
         bool warm = s.game.temp_lv > DR_TEMP_COLD;
-        char t[24], v[48];
+        char t[24], v[56];
         dr_bld_cost_t c = dr_building_cost(i, lv);
         snprintf(t, sizeof(t), "%s Lv%u", bld_short(i), lv);
         if (c.wood == 0xFFFFFFFFu) {
             snprintf(v, sizeof(v), "上限");            // 满级:不再显示天文缺口
         } else if (can && build_affordable((uint8_t)i) && warm) {
-            // 可建:完整造价(紧凑格式,避免数值列截断)
-            if (c.fur && c.meat)
-                snprintf(v, sizeof(v), "%lu木%lu毛%lu肉",
-                         (unsigned long)c.wood, (unsigned long)c.fur,
-                         (unsigned long)c.meat);
-            else if (c.fur)
-                snprintf(v, sizeof(v), "%lu木%lu毛",
-                         (unsigned long)c.wood, (unsigned long)c.fur);
-            else if (c.meat)
-                snprintf(v, sizeof(v), "%lu木%lu肉",
-                         (unsigned long)c.wood, (unsigned long)c.meat);
-            else
-                snprintf(v, sizeof(v), "%lu木", (unsigned long)c.wood);
+            int n = snprintf(v, sizeof(v), "%lu木", (unsigned long)c.wood);
+            for (int k = 0; k < 6 && n > 0 && n < (int)sizeof(v); k++) {
+                uint32_t cv = bld_comp_cost(k_comps[k].res, &c);
+                if (cv) n += snprintf(v + n, sizeof(v) - n, "%lu%s",
+                                      (unsigned long)cv, k_comps[k].label);
+            }
         } else {
-            // 不可选:列缺口(资源差值);无缺口则说明是室温或解锁问题
+            // 不可选:列缺口;无缺口则说明是室温或解锁问题
+            int n = 0;
             uint32_t dw = (c.wood > s.game.res[DR_RES_WOOD])
                               ? c.wood - s.game.res[DR_RES_WOOD] : 0;
-            uint32_t df = (c.fur > s.game.res[DR_RES_FUR])
-                              ? c.fur - s.game.res[DR_RES_FUR] : 0;
-            uint32_t dm = (c.meat > s.game.res[DR_RES_MEAT])
-                              ? c.meat - s.game.res[DR_RES_MEAT] : 0;
-            if (dw || df || dm) {
-                int n = snprintf(v, sizeof(v), "缺");
-                if (dw) n += snprintf(v + n, sizeof(v) - n, "%lu木",
-                                      (unsigned long)dw);
-                if (df) n += snprintf(v + n, sizeof(v) - n, "%lu毛",
-                                      (unsigned long)df);
-                if (dm && n > 0 && n < (int)sizeof(v))
-                    snprintf(v + n, sizeof(v) - n, "%lu肉",
-                             (unsigned long)dm);
-            } else if (!warm) {
-                snprintf(v, sizeof(v), "太冷");
-            } else {
-                snprintf(v, sizeof(v), "未解锁");
+            if (dw || c.fur || c.meat || c.iron || c.coal || c.steel || c.sulphur)
+                n = snprintf(v, sizeof(v), "缺");
+            if (dw) n += snprintf(v + n, sizeof(v) - n, "%lu木", (unsigned long)dw);
+            for (int k = 0; k < 6 && n > 0 && n < (int)sizeof(v); k++) {
+                uint32_t cv = bld_comp_cost(k_comps[k].res, &c);
+                if (!cv) continue;
+                uint32_t have = s.game.res[k_comps[k].res];
+                if (cv > have)
+                    n += snprintf(v + n, sizeof(v) - n, "%lu%s",
+                                  (unsigned long)(cv - have), k_comps[k].label);
             }
+            if (n == 0) snprintf(v, sizeof(v), "%s", warm ? "未解锁" : "太冷");
         }
-        set_row(i, 52 + i * 23, t, v, s.focus == i,
+        set_row(i, 44 + i * 21, t, v, s.focus == i,
                 !(can && build_affordable((uint8_t)i) && warm));
     }
-    set_row(DR_BLD_KIND_COUNT, 52 + DR_BLD_KIND_COUNT * 23, "返回", "",
+    set_row(DR_BLD_KIND_COUNT, 44 + DR_BLD_KIND_COUNT * 21, "返回", "",
             s.focus == DR_BLD_KIND_COUNT, false);
     // 底部说明:光标所选建筑的作用
     static const char *bld_desc[] = {
@@ -789,9 +800,11 @@ static void render_build(void) {
         "解锁游牧商人(只买不卖)",  // 贸易站
         "解锁制革匠:毛皮变皮革",    // 制革坊
         "解锁熏肉匠:肉变干肉",      // 熏肉房
+        "解锁炼钢工:铁+煤炼钢",     // 炼钢厂
+        "解锁军械工:钢+硫造子弹",   // 军械库
     };
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(s_hint, 0, 230);
+    lv_obj_set_pos(s_hint, 0, 258);
     if (s.game.temp_lv <= DR_TEMP_COLD)
         lv_label_set_text(s_hint, "屋里太冷,先点火再建造");   // 施工门槛(原版)
     else
@@ -812,7 +825,7 @@ static int8_t village_row_job(int row) {
 
 static void render_village(void) {
     render_topbar(outside_name());
-    render_tabs(1, true, false, -1);
+    render_tabs(1, true, nav_tab_enabled(2), -1);
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     char v[32];
     bool adj = (s.village_adj >= 0);
@@ -871,9 +884,86 @@ static void render_village(void) {
     }
 }
 
+// 地形/地标配色(荒野视口)
+static uint32_t map_tile_color(uint8_t t, bool seen) {
+    if (!seen) return COL_BG;                 // 迷雾
+    switch ((dr_world_tile_t)t) {
+        case DR_WT_VILLAGE:   return COL_GOLD;
+        case DR_WT_FOREST:    return 0x3B5323;
+        case DR_WT_FIELD:     return 0x77804A;
+        case DR_WT_BARREN:    return 0x6E5B3F;
+        case DR_WT_IRON:      return 0xAFAFBC;
+        case DR_WT_COAL:      return 0x40404A;
+        case DR_WT_SULPHUR:   return 0xC9C25B;
+        case DR_WT_OUTPOST:   return 0x5BC8C8;
+        case DR_WT_SHIP:      return 0xC85BC8;
+        default:              return COL_BG;
+    }
+}
+
+static const char *map_tile_name(uint8_t t) {
+    switch ((dr_world_tile_t)t) {
+        case DR_WT_VILLAGE:  return "小屋";
+        case DR_WT_FOREST:   return "森林";
+        case DR_WT_FIELD:    return "田野";
+        case DR_WT_BARREN:   return "荒地";
+        case DR_WT_IRON:     return "铁矿";
+        case DR_WT_COAL:     return "煤矿";
+        case DR_WT_SULPHUR:  return "硫磺矿";
+        case DR_WT_OUTPOST:  return "哨站";
+        case DR_WT_SHIP:     return "星舰";
+        default:             return "?";
+    }
+}
+
 static void render_map(void) {
     render_topbar("荒野");
-    // 不显示导航页签(mockup ⑥):资源行占 y=24,与页签同带会文字叠文字
+    render_tabs(2, forest_open(), true, -1);
+
+    if (!s.game.in_wilderness) {
+        // 出发准备页:水/干肉/HP + 出发行
+        for (int i = 0; i < 4; i++) {
+            cell_base(i, i * 49, 24);
+            lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
+        }
+        for (int i = 4; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text_fmt(s_cells[0], "水 %u",
+                              dr_world_water_cap(&s.game));
+        lv_label_set_text_fmt(s_cells[1], "干肉 %lu",
+                              (unsigned long)s.game.res[DR_RES_FOOD]);
+        lv_label_set_text_fmt(s_cells[2], "HP %u",
+                              dr_world_health_cap(&s.game));
+        lv_label_set_text_fmt(s_cells[3], "里 %u", 0);
+        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        char v[24];
+        if ((int32_t)(now_ms - s.embark_cd_ms) < 0)
+            snprintf(v, sizeof(v), "%lds",
+                     (long)((s.embark_cd_ms - now_ms + 999) / 1000));
+        else
+            snprintf(v, sizeof(v), "就绪");
+        set_row(0, 150, "出发远征", v, s.focus == 0,
+                s.game.res[DR_RES_FOOD] == 0);
+        set_row(1, 176, "返回", "", s.focus == 1, false);
+        for (int i = 2; i < LIST_ROWS; i++) lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_pos(s_hint, 0, 210);
+        lv_label_set_text(s_hint,
+            s.game.res[DR_RES_FOOD] == 0 ? "需要干肉才能出发(熏肉房生产)"
+                                         : "带上干肉和水,踏上尘土路");
+        return;
+    }
+
+    // 远征中:9×9 视口(中心=主角)+ 方向行
+    for (int i = 0; i < MAP_CELLS; i++) {
+        lv_obj_clear_flag(s_map[i], LV_OBJ_FLAG_HIDDEN);
+        int cx = (int)s.game.hero_x + (i % 9) - 4;
+        int cy = (int)s.game.hero_y + (i / 9) - 4;
+        bool me = (i % 9 == 4 && i / 9 == 4);
+        uint8_t t = dr_world_tile(&s_world, cx, cy);
+        bool seen = me || dr_world_seen(&s_world, cx, cy);
+        lv_obj_set_style_bg_color(s_map[i],
+            lv_color_hex(me ? COL_ME : map_tile_color(t, seen)), 0);
+    }
     for (int i = 0; i < 4; i++) {
         cell_base(i, i * 49, 24);
         lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
@@ -881,28 +971,33 @@ static void render_map(void) {
     for (int i = 4; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text_fmt(s_cells[0], "水 %u", s.game.water);
     lv_label_set_text_fmt(s_cells[1], "食 %u", s.game.food);
-    lv_label_set_text(s_cells[2], "HP 8");
-    lv_label_set_text(s_cells[3], "步 12");
-    for (int i = 0; i < MAP_CELLS; i++) {
-        lv_obj_clear_flag(s_map[i], LV_OBJ_FLAG_HIDDEN);
-        int cx = i % 9, cy = i / 9;
-        lv_color_t c = lv_color_hex(COL_BG);
-        int dx = cx - 4, dy = cy - 4;
-        if (cx == 4 && cy == 4) c = lv_color_hex(COL_ME);
-        else if (cx == 3 && cy == 5) c = lv_color_hex(COL_GOLD);
-        else if (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1) c = lv_color_hex(0x55524D);
-        else if (dx >= -3 && dx <= 3 && dy >= -3 && dy <= 3) c = lv_color_hex(COL_CD);
-        lv_obj_set_style_bg_color(s_map[i], c, 0);
+    lv_label_set_text_fmt(s_cells[2], "HP %u/%u", s.game.hero_hp, s.game.hero_hp_max);
+    lv_label_set_text_fmt(s_cells[3], "里 %u", dr_world_home_dist(&s.game));
+
+    // 方向行:显示目标格(雾内显示"未知")
+    static const int dirs[4][2] = { {1,0},{0,1},{-1,0},{0,-1} };
+    static const char *dir_names[4] = { "东", "南", "西", "北" };
+    char v[24];
+    for (int d = 0; d < 4; d++) {
+        int tx = (int)s.game.hero_x + dirs[d][0];
+        int ty = (int)s.game.hero_y + dirs[d][1];
+        if (tx < 0 || ty < 0 || tx >= DR_WORLD_SIZE || ty >= DR_WORLD_SIZE)
+            snprintf(v, sizeof(v), "尽头");
+        else if (dr_world_seen(&s_world, tx, ty))
+            snprintf(v, sizeof(v), "%s", map_tile_name(dr_world_tile(&s_world, tx, ty)));
+        else
+            snprintf(v, sizeof(v), "未知");
+        set_row(d, 158 + d * 24, dir_names[d], v, s.focus == d, false);
     }
-    lv_obj_clear_flag(s_legend[0], LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(s_legend[1], LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(s_legend[0], 0, 146);
-    lv_obj_set_pos(s_legend[1], 0, 161);
-    lv_label_set_text(s_legend[0], "■你 ■家 ■照亮");
-    lv_label_set_text(s_legend[1], "■走过 ■未知");
-    set_row(0, 188, "东 干涸河床 2格", "", s.focus == 0, false);
-    set_row(1, 212, "北 未知", "", s.focus == 1, false);
-    set_row(2, 236, "西 小屋 3格", "回", s.focus == 2, false);
+    snprintf(v, sizeof(v), "余%u", s.game.food);
+    set_row(4, 158 + 4 * 24, "吃干肉", s.game.food ? v : "没有",
+            s.focus == 4, s.game.food == 0);
+    for (int i = 5; i < LIST_ROWS; i++) lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(s_hint, 0, 285);
+    lv_label_set_text(s_hint, dr_world_danger(&s.game)
+                                  ? "离小屋太远,没有护甲很危险"
+                                  : "回到小屋格即安全到家");
 }
 
 static void render_ruin(void) {
@@ -1009,10 +1104,10 @@ static void render_trade(void) {
 
 static void render_settings(void) {
     render_topbar("设置");
-    render_tabs(3, forest_open(), false, -1);
+    render_tabs(3, forest_open(), nav_tab_enabled(2), -1);
     set_row(0, 52, "操作说明", "键位:三键", s.focus == 0, false);
     set_row(1, 76, "重开本局", "需确认", s.focus == 1, false);
-    set_row(2, 100, "关于", "v0.4", s.focus == 2, false);
+    set_row(2, 100, "关于", "v0.5", s.focus == 2, false);
     set_row(3, 124, "返回", "", s.focus == 3, false);
 }
 
@@ -1101,7 +1196,7 @@ static int page_lines(void) {
         case PG_HOME: return home_lines();
         case PG_BUILD: return DR_BLD_KIND_COUNT + 1;
         case PG_VILLAGE: return 8;
-        case PG_MAP: return 3;
+        case PG_MAP: return s.game.in_wilderness ? 5 : 2;
         case PG_RUIN: return 4;
         case PG_COMBAT: return 4;
         case PG_TRADE: return 8;
@@ -1164,8 +1259,19 @@ static bool row_enabled(int idx) {
             return dr_rules_job_unlocked(&s.game, (uint8_t)village_row_job(idx));
         case PG_TRADE:
             return idx == 7 || trade_affordable((uint8_t)idx);
+        case PG_MAP:
+            if (!s.game.in_wilderness) {
+                if (idx == 0) {   // 出发:需干肉 + 冷却已过
+                    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+                    return s.game.res[DR_RES_FOOD] > 0 &&
+                           (int32_t)(now_ms - s.embark_cd_ms) >= 0;
+                }
+                return idx == 1;   // 返回
+            }
+            if (idx == 4) return s.game.food > 0;   // 吃干肉
+            return idx < 4;                          // 东南西北
         default:
-            return true;   // 主页动作/设置/地图/废村/弹窗选项均无禁用态
+            return true;   // 主页动作/设置/弹窗选项均无禁用态
     }
 }
 
@@ -1281,11 +1387,75 @@ static void list_action(int idx) {
                 }
             }
             break;
-        case PG_MAP:
-            if (idx == 2) page_goto(PG_HOME);
-            else if (idx == 0) page_goto(PG_RUIN);
-            else log_push("未知的方向");
+        case PG_MAP: {
+            uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            if (!s.game.in_wilderness) {
+                if (idx == 0) {                       // 出发远征
+                    if ((int32_t)(now_ms - s.embark_cd_ms) < 0) {
+                        log_push("歇一歇再出发");
+                    } else if (dr_world_embark(&s_world, &s.game)) {
+                        log_push("带上干肉,踏上尘土路");
+                        s.save_pending = true;
+                    } else {
+                        log_push("需要干肉才能出发(熏肉房生产)");
+                    }
+                    break;
+                }
+                page_goto(PG_HOME);
+                break;
+            }
+            if (idx <= 3) {                           // 东南西北移动一格
+                static const int dirs[4][2] = {
+                    {1, 0}, {0, 1}, {-1, 0}, {0, -1}
+                };
+                uint64_t flags_before = s.game.flags;
+                dr_move_result_t r =
+                    dr_world_move(&s_world, &s.game, dirs[idx][0], dirs[idx][1]);
+                switch (r) {
+                    case DR_MOVE_WARN_THIRST: log_push("口渴难忍"); break;
+                    case DR_MOVE_WARN_HUNGER: log_push("饥饿来袭"); break;
+                    case DR_MOVE_DEATH:
+                        log_push("你倒在了荒野里,物资全失");
+                        s.embark_cd_ms = now_ms + 120u * 1000u;
+                        s.save_pending = true;
+                        break;
+                    case DR_MOVE_HOME: {
+                        log_push("回到了小屋");
+                        if (!(flags_before & ((uint64_t)1u << DR_FLAG_IRON_MINE)) &&
+                            (s.game.flags & ((uint64_t)1u << DR_FLAG_IRON_MINE)))
+                            log_push("可以派村民去采铁矿了");
+                        if (!(flags_before & ((uint64_t)1u << DR_FLAG_COAL_MINE)) &&
+                            (s.game.flags & ((uint64_t)1u << DR_FLAG_COAL_MINE)))
+                            log_push("可以派村民去采煤矿了");
+                        if (!(flags_before & ((uint64_t)1u << DR_FLAG_SULPHUR_MINE)) &&
+                            (s.game.flags & ((uint64_t)1u << DR_FLAG_SULPHUR_MINE)))
+                            log_push("可以派村民去采硫磺矿了");
+                        s.save_pending = true;
+                        page_goto(PG_HOME);
+                        break;
+                    }
+                    case DR_MOVE_OUTPOST:   log_push("哨站:把水囊灌满了"); break;
+                    case DR_MOVE_IRON:      log_push("发现铁矿!(回家后可派矿工)"); break;
+                    case DR_MOVE_COAL:      log_push("发现煤矿!(回家后可派矿工)"); break;
+                    case DR_MOVE_SULPHUR:   log_push("发现硫磺矿!(回家后可派矿工)"); break;
+                    case DR_MOVE_SHIP:      log_push("一艘坠毁的星舰躺在荒野上(M5)"); break;
+                    case DR_MOVE_BLOCKED:   log_push("世界的尽头"); break;
+                    case DR_MOVE_OK:        s.save_pending = true; break;
+                }
+                s.dirty = true;
+                break;
+            }
+            if (idx == 4) {                           // 吃干肉(回 8 HP)
+                if (dr_world_eat(&s.game)) {
+                    log_push("吃了口干肉,缓过劲来");
+                    s.save_pending = true;
+                } else {
+                    log_push("没有干肉了");
+                }
+                break;
+            }
             break;
+        }
         case PG_RUIN:
             if (idx == 3) page_goto(PG_MAP);
             else log_push("房间系统 M4 实装");
@@ -1489,7 +1659,8 @@ static bool forest_open(void) {
 static bool nav_tab_enabled(int i) {
     switch (i) {
         case 1: return forest_open();
-        case 2: return false;
+        case 2: return s.game.in_wilderness ||     // 远征中必须能看地图
+                       s.game.res[DR_RES_FOOD] > 0; // 有干肉即可出发(原版口径)
         default: return true;
     }
 }
@@ -1668,6 +1839,14 @@ void darkroom_app_enter(void) {
             }
             if (oy.fire_out) log_push("回来时火已经熄了");
         }
+    }
+
+    // 世界(种子派生,重启同图)与远征中断兜底:断电按死亡处理(物资已扣)
+    dr_world_gen(&s_world, s.game.map_seed);
+    if (loaded && s.game.in_wilderness) {
+        dr_world_fail_trip(&s_world, &s.game);
+        log_push("远征中断:你在荒野中失去了意识");
+        s.save_pending = true;
     }
 
     build_ui();

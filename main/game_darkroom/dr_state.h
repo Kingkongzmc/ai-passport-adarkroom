@@ -68,6 +68,9 @@ typedef struct {
     // v3 尾插(对齐原版 room.js 的温度与建造者剧情)。
     uint8_t  temp_lv;                   // 室温 0..4(冻结/冷/微温/暖/热),向火焰档靠拢
     uint8_t  builder_lv;                // 建造者(陌生人)0=无 1=晕倒 2=发抖 3=沉睡 4=帮忙
+
+    // v4 尾插(M4 远征)。
+    uint8_t  weapon_lv;                 // 武器:0拳 1骨矛 2铁剑 3钢剑 4步枪(工坊制造,切片三)
 } dr_game_t;
 
 #pragma pack(push, 1)
@@ -97,6 +100,7 @@ bool dr_state_load(const void *blob, size_t len, dr_game_t *out);
 // 主机测试用:把 g 压成历史布局镜像(验证迁移链)。返回写入字节数;缓冲不足返回 0。
 size_t dr_state_pack_v1(const dr_game_t *g, void *out, size_t outsz);
 size_t dr_state_pack_v2(const dr_game_t *g, void *out, size_t outsz);
+size_t dr_state_pack_v3(const dr_game_t *g, void *out, size_t outsz);
 
 // 离线结算(M2 起接产出表;M1 提供时间钳制口径):
 //   delta_s = now_ts - g->saved_at_ts

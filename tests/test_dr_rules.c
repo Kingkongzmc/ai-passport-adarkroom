@@ -23,6 +23,11 @@ static void test_building_costs(void) {
     c = dr_building_cost(DR_BLD_TRADE_POST, 0);  assert(c.wood == 400 && c.fur == 100);
     c = dr_building_cost(DR_BLD_TANNERY, 0);     assert(c.wood == 500 && c.fur == 50);
     c = dr_building_cost(DR_BLD_SMOKEHOUSE, 0);  assert(c.wood == 600 && c.meat == 50);
+    c = dr_building_cost(DR_BLD_STEELWORKS, 0);
+    assert(c.wood == 1500 && c.iron == 100 && c.coal == 100);
+    c = dr_building_cost(DR_BLD_STEELWORKS, 1);  assert(c.wood == 0xFFFFFFFFu);
+    c = dr_building_cost(DR_BLD_ARMOURY, 0);
+    assert(c.wood == 3000 && c.steel == 100 && c.sulphur == 50);
 }
 
 // 建造门槛:建造者已帮忙 + 木材过半 + 材料见过;施工需室温>冷
@@ -392,6 +397,44 @@ static void test_offline(void) {
     assert(g.rng_seed_state == rt.rng.s);         // 离线序列写回
 }
 
+// ---- 矿工链(M4):矿工吃干肉产矿;炼钢/军械转化 ----
+static void test_miner_jobs(void) {
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    g.population = 5;
+    // 解锁:到访矿并回家(flags),炼钢/军械挂建筑
+    assert(!dr_rules_job_unlocked(&g, DR_JOB_IRON_MINER));
+    g.flags |= (uint64_t)1u << DR_FLAG_IRON_MINE;
+    assert(dr_rules_job_unlocked(&g, DR_JOB_IRON_MINER));
+    assert(!dr_rules_job_unlocked(&g, DR_JOB_STEELWORKER));
+    g.building_lv[DR_BLD_STEELWORKS] = 1;
+    g.building_lv[DR_BLD_ARMOURY] = 1;
+    assert(dr_rules_job_unlocked(&g, DR_JOB_STEELWORKER));
+    assert(dr_rules_job_unlocked(&g, DR_JOB_ARMOURER));
+
+    // 收入:1 铁矿工 + 1 煤矿工 + 1 炼钢工 + 1 军械工,干肉 5
+    g.flags |= (uint64_t)1u << DR_FLAG_COAL_MINE;
+    assert(dr_rules_job_assign(&g, DR_JOB_IRON_MINER, 1));
+    assert(dr_rules_job_assign(&g, DR_JOB_COAL_MINER, 1));
+    assert(dr_rules_job_assign(&g, DR_JOB_STEELWORKER, 1));
+    assert(dr_rules_job_assign(&g, DR_JOB_ARMOURER, 1));
+    g.res[DR_RES_FOOD] = 5;
+    g.res[DR_RES_STEEL] = 1;
+    g.res[DR_RES_SULPHUR] = 1;
+    dr_rules_rt_t rt;
+    dr_rules_rt_init(&rt, &g, 0);
+    dr_rules_event_t ev; uint16_t arg;
+    (void)dr_rules_tick(&rt, &g, 10u * 1000u, &ev, &arg);   // 1 个收入 tick
+
+    // 矿工各吃 1 干肉产 1 矿;炼钢工吃 1 铁 1 煤产 1 钢;
+    // 军械工吃 1 钢 1 硫(钢被矿工链后置:铁1→钢,耗尽)产 1 子弹
+    assert(g.res[DR_RES_FOOD] == 3);
+    assert(g.res[DR_RES_IRON] == 0 && g.res[DR_RES_COAL] == 0);
+    assert(g.res[DR_RES_STEEL] == 1);   // 原 1 + 炼 1 − 军械 1
+    assert(g.res[DR_RES_BULLETS] == 1);
+    assert(g.res[DR_RES_SULPHUR] == 0);
+}
+
 int main(void) {
     test_building_costs();
     test_build_gates();
@@ -406,6 +449,7 @@ int main(void) {
     test_wanderers();
     test_trade();
     test_offline();
+    test_miner_jobs();
     printf("test_dr_rules: all passed\n");
     return 0;
 }

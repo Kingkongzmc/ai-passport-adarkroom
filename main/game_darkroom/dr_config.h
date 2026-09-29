@@ -11,9 +11,14 @@ extern "C" {
 #endif
 
 // ---- 存档 ----
-#define DR_SAVE_VERSION   3u      // 存档结构版本,迁移见 dr_state.h
+#define DR_SAVE_VERSION   4u      // 存档结构版本,迁移见 dr_state.h
 #define DR_SAVE_NVS_KEY   "dr_save"
 #define DR_FLAG_BITS      64      // 剧情标记位数(事件表引用 0..63)
+
+// 剧情标记位(flags;规则层与事件表共用;M4:到访矿并回家后置位)
+#define DR_FLAG_IRON_MINE     4u
+#define DR_FLAG_COAL_MINE     5u
+#define DR_FLAG_SULPHUR_MINE  6u
 
 // ---- 资源(原版 stores;布局红线:只在尾部追加,不得中间插入) ----
 typedef enum {
@@ -34,6 +39,7 @@ typedef enum {
     DR_RES_SCALES,        // 鳞(v3 尾插;陷阱掉落/贸易)
     DR_RES_TEETH,         // 牙(v3 尾插;陷阱掉落/贸易)
     DR_RES_CLOTH,         // 布(v3 尾插;陷阱掉落)
+    DR_RES_MEDICINE,      // 药(v4 尾插;贸易购入,远征治疗 +20HP)
     DR_RES_KIND_COUNT,
 } dr_res_t;
 
