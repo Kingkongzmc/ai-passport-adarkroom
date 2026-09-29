@@ -86,8 +86,9 @@ static struct {
     uint8_t confirm_from;      // 确认页来源(0=设置重开 1=贸易全卖)
     int8_t nav_focus;          // 主页导航焦点(-1=动作区,0..3=tab)
     int8_t village_adj;        // 村庄调节模式:在调的职业(-1=未调节)
-    bool prev_gather_ready;    // 上一秒冷却是否已就绪(就绪瞬间触发重绘)
+    bool prev_gather_ready;    // 上一拍冷却秒数(变化即重绘:冷却条/倒计时逐拍走)
     bool prev_trap_ready;
+    bool prev_stoke_active;    // 主页添柴冷却条活动态(结束瞬间也要重绘一次)
     uint32_t autosave_ms;      // 周期存档基准(挂机产出也落盘,断电回滚≤1分钟)
     dr_game_t game;
     dr_rules_rt_t rules_rt;
@@ -208,6 +209,7 @@ static const char *bld_short(int id) {
 
 // 村庄页签门:森林剧情解锁(原版 unlockForest)
 static bool forest_open(void);
+static bool build_affordable(uint8_t id);   // 建造行足额可付判定
 
 // 第二页签名(原版 a silent forest → village):建小屋前是"森林",之后是"村庄"
 static const char *outside_name(void) {
@@ -730,10 +732,13 @@ static void render_build(void) {
     for (int i = 0; i < DR_BLD_KIND_COUNT; i++) {
         uint8_t lv = s.game.building_lv[i];
         bool can = dr_rules_can_build(&s.game, i);
+        bool warm = s.game.temp_lv > DR_TEMP_COLD;
         char t[24], v[48];
         dr_bld_cost_t c = dr_building_cost(i, lv);
         snprintf(t, sizeof(t), "%s Lv%u", bld_short(i), lv);
-        if (can) {
+        if (c.wood == 0xFFFFFFFFu) {
+            snprintf(v, sizeof(v), "上限");            // 满级:不再显示天文缺口
+        } else if (can && build_affordable((uint8_t)i) && warm) {
             // 可建:完整造价(紧凑格式,避免数值列截断)
             if (c.fur && c.meat)
                 snprintf(v, sizeof(v), "%lu木%lu毛%lu肉",
@@ -748,7 +753,7 @@ static void render_build(void) {
             else
                 snprintf(v, sizeof(v), "%lu木", (unsigned long)c.wood);
         } else {
-            // 不可建:只列缺口(资源差值);资源够但前置不满足 → 未解锁
+            // 不可选:列缺口(资源差值);无缺口则说明是室温或解锁问题
             uint32_t dw = (c.wood > s.game.res[DR_RES_WOOD])
                               ? c.wood - s.game.res[DR_RES_WOOD] : 0;
             uint32_t df = (c.fur > s.game.res[DR_RES_FUR])
@@ -761,13 +766,17 @@ static void render_build(void) {
                                       (unsigned long)dw);
                 if (df) n += snprintf(v + n, sizeof(v) - n, "%lu毛",
                                       (unsigned long)df);
-                if (dm) snprintf(v + n, sizeof(v) - n, "%lu肉",
-                                 (unsigned long)dm);
+                if (dm && n > 0 && n < (int)sizeof(v))
+                    snprintf(v + n, sizeof(v) - n, "%lu肉",
+                             (unsigned long)dm);
+            } else if (!warm) {
+                snprintf(v, sizeof(v), "太冷");
             } else {
                 snprintf(v, sizeof(v), "未解锁");
             }
         }
-        set_row(i, 52 + i * 23, t, v, s.focus == i, !can);
+        set_row(i, 52 + i * 23, t, v, s.focus == i,
+                !(can && build_affordable((uint8_t)i) && warm));
     }
     set_row(DR_BLD_KIND_COUNT, 52 + DR_BLD_KIND_COUNT * 23, "返回", "",
             s.focus == DR_BLD_KIND_COUNT, false);
@@ -1107,6 +1116,16 @@ static int page_lines(void) {
     }
 }
 
+// 建造行可用:材料足额付得起(可见性规则之上的硬门槛;不足的行不可选,
+// 光标跳过——三键约定"锁定或资源不足的行自动跳过")
+static bool build_affordable(uint8_t id) {
+    dr_bld_cost_t c = dr_building_cost(id, s.game.building_lv[id]);
+    if (c.wood == 0xFFFFFFFFu) return false;
+    return s.game.res[DR_RES_WOOD] >= c.wood &&
+           s.game.res[DR_RES_FUR] >= c.fur &&
+           s.game.res[DR_RES_MEAT] >= c.meat;
+}
+
 // 贸易行可用:纯支付能力检查(不执行交易;原版牌价见 dr_rules.c k_trade_cost)
 static bool trade_affordable(uint8_t item) {
     if (s.game.building_lv[DR_BLD_TRADE_POST] == 0) return false;
@@ -1135,7 +1154,9 @@ static bool row_enabled(int idx) {
     switch (s.page) {
         case PG_BUILD:
             return idx == DR_BLD_KIND_COUNT ||          // 返回
-                   dr_rules_can_build(&s.game, idx);
+                   (dr_rules_can_build(&s.game, idx) &&
+                    build_affordable((uint8_t)idx) &&
+                    s.game.temp_lv > DR_TEMP_COLD);     // 过冷也不可选(提示见页底)
         case PG_VILLAGE:
             if (idx == 0 || idx == 7) return true;      // 采集 / 返回
             if (idx == 1) return s.game.building_lv[DR_BLD_TRAP] > 0;
@@ -1422,18 +1443,24 @@ static void tick(lv_timer_t *t) {
                 break;
         }
     }
-    if (s.page == PG_HOME) check_event();
+    if (s.page == PG_HOME) {
+        check_event();
+        // 添柴冷却条随 250ms 心跳逐拍收短;冷却结束瞬间也要重绘一次清掉底色
+        int32_t s_rem = (int32_t)(s.rules_rt.stoke_ready_ms - now_ms);
+        if (s_rem > 0 || s.prev_stoke_active) s.dirty = true;
+        s.prev_stoke_active = (s_rem > 0);
+    }
     if (s.page == PG_VILLAGE) {
-        // 采集/陷阱冷却逐秒刷新;"就绪瞬间"必须重绘一次,否则倒计时冻在 1s
+        // 采集/陷阱倒计时按秒变化才重绘(文字分辨率 1s,跳变即刷)
         int32_t g_rem = (int32_t)(s.rules_rt.gather_ready_ms - now_ms);
         int32_t t_rem = (int32_t)(s.rules_rt.trap_next_ms - now_ms);
         bool t_has = s.game.building_lv[DR_BLD_TRAP] > 0;
-        if (g_rem > 0 || (t_has && t_rem > 0) ||
-            (s.prev_gather_ready != (g_rem <= 0)) ||
-            (t_has && s.prev_trap_ready != (t_rem <= 0)))
+        bool g_act = (g_rem > 0), t_act = t_has && (t_rem > 0);
+        if (g_act != s.prev_gather_ready || t_act != s.prev_trap_ready ||
+            g_act || t_act)
             s.dirty = true;
-        s.prev_gather_ready = (g_rem <= 0);
-        s.prev_trap_ready = t_has && (t_rem <= 0);
+        s.prev_gather_ready = g_act;
+        s.prev_trap_ready = t_act;
     }
     // 周期存档:纯挂机时收入产出也落盘(与按键/渲染同在 LVGL
     // 线程,天然与状态变更互斥;NVS 写入约毫秒级,每分钟一次可接受)
@@ -1640,7 +1667,7 @@ void darkroom_app_enter(void) {
     s_key_quit = false;
     s_key_queue = xQueueCreate(8, sizeof(key_event_t));
     xTaskCreate(key_task, "dr_key", 8192, NULL, 5, &s_key_task);
-    s_timer = lv_timer_create(tick, 1000, NULL);
+    s_timer = lv_timer_create(tick, 250, NULL);   // 250ms:冷却条平滑收短
 
     page_goto(PG_TITLE);
     render();
