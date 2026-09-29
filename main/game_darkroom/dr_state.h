@@ -63,7 +63,7 @@ typedef struct {
     // 装备与偏好(v2 尾插;迁移见 dr_state_pack_v1/dr_state_load)。
     uint8_t  armor_lv;                  // 护甲:0=无,1=皮甲(战斗减免 M4 接入)
     uint8_t  trap_bait_on;              // 弃用(v3:饵随查看自动消耗,原版无开关)
-    uint8_t  _rsv[2];                   // 对齐预留,恒 0
+    uint8_t  _rsv[2];                   // [0]=猎人半率相位(落盘,原版收入小数累积同义);[1] 预留
 
     // v3 尾插(对齐原版 room.js 的温度与建造者剧情)。
     uint8_t  temp_lv;                   // 室温 0..4(冻结/冷/微温/暖/热),向火焰档靠拢

@@ -133,15 +133,20 @@ static void test_builder_arc(void) {
     (void)dr_rules_tick(&rt, &g, 60000, &ev, &arg);
     assert(g.builder_lv == DR_BUILDER_DOWN);
 
-    // 室温暖(火保持旺盛,否则调温会把室温拉回去):每 30s 一态 → 发抖 → 沉睡 → 帮忙
+    // 室温暖(火保持旺盛,否则调温会把室温拉回去):每 30s 一态 → 发抖 → 沉睡
+    // (沉睡→帮忙不走定时器:原版在玩家回到房间时触发,见 dr_rules_builder_visit)
     g.fire_lv = DR_FIRE_BURNING;
     g.temp_lv = DR_TEMP_WARM;
     (void)dr_rules_tick(&rt, &g, 91000, &ev, &arg);
     assert(g.builder_lv == DR_BUILDER_SHIVER && ev == DR_RT_EV_BUILDER_SHIVER);
     (void)dr_rules_tick(&rt, &g, 121000, &ev, &arg);
     assert(g.builder_lv == DR_BUILDER_SLEEP && ev == DR_RT_EV_BUILDER_SLEEP);
-    (void)dr_rules_tick(&rt, &g, 151000, &ev, &arg);
-    assert(g.builder_lv == DR_BUILDER_HELP && ev == DR_RT_EV_BUILDER_HELP);
+    (void)dr_rules_tick(&rt, &g, 151000, &ev, &arg);   // 再等一态:仍是沉睡
+    assert(g.builder_lv == DR_BUILDER_SLEEP && ev == DR_RT_EV_NONE);
+    // 拜访房间(回小屋页):沉睡 → 帮忙;其他状态拜访无效
+    assert(dr_rules_builder_visit(&g));
+    assert(g.builder_lv == DR_BUILDER_HELP);
+    assert(!dr_rules_builder_visit(&g));
 }
 
 // ---- 采集:+10 木;板车后 +50(原版 gatherWood) ----

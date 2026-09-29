@@ -1182,6 +1182,11 @@ static void page_goto(page_t p) {
     s.page = p;
     s.focus = 0;
     s.village_adj = -1;   // 离开村庄页/任意切页退出人数调节
+    // 回到小屋页 = 拜访房间(原版 onArrival):陌生人从沉睡中醒来帮忙
+    if (p == PG_HOME && dr_rules_builder_visit(&s.game)) {
+        log_push("她站在火边:可以帮忙了");
+        s.save_pending = true;
+    }
     if (!row_enabled(0)) focus_move(1);   // 首行禁用则落到首个可用行
     s.dirty = true;
 }
@@ -1433,10 +1438,12 @@ static void tick(lv_timer_t *t) {
                 log_push("火弱了下去");
                 break;
             case DR_RT_EV_WANDERER:
-                log_push(arg == 1 ? "一位流浪者住了下来"
+                // 原版五档文案:1 陌生人 / <5 一家人 / <10 一小群 / <30 车队 / 其余 大批流民
+                log_push(arg == 1 ? "一位流浪者在夜里住了下来"
                       : arg < 5 ? "一家人在荒野里找到了这里"
                       : arg < 10 ? "一小群人流浪到此"
-                                 : "一支队伍安顿了下来");
+                      : arg < 30 ? "一支车队安顿了下来"
+                                 : "大批流民涌到了火光旁");
                 s.save_pending = true;
                 break;
             default:

@@ -112,6 +112,8 @@ void dr_rules_rt_init(dr_rules_rt_t *rt, dr_game_t *g, uint32_t now_ms) {
     // RNG 从档内状态直接续跑(trap_check 每次把推进后的状态回写档)
     dr_rng_seed(&rt->rng, g->rng_seed_state);
     rt->rng_inited = true;
+    // 猎人半率相位落盘于 _rsv[0](原版收入引擎的小数累积是持久状态)
+    rt->hunter_parity = (g->_rsv[0] != 0);
     rt->fire_deadline_ms = now_ms + DR_FIRE_LEVEL_SECONDS * 1000u;
     rt->temp_next_ms = now_ms + DR_TEMP_LEVEL_SECONDS * 1000u;
     rt->builder_next_ms = now_ms + DR_BUILDER_STATE_SECONDS * 1000u;
@@ -180,6 +182,7 @@ static void income_step(dr_rules_rt_t *rt, dr_game_t *g, dr_income_out_t *out) {
     if (g->builder_lv >= DR_BUILDER_HELP) wood += 2u;  // 建造者 +2 木(原版)
 
     rt->hunter_parity = !rt->hunter_parity;
+    g->_rsv[0] = rt->hunter_parity ? 1u : 0u;          // 相位落盘(原版小数累积同义)
     uint32_t fur = 0, meat = 0;
     if (rt->hunter_parity) {                           // 猎人 +0.5 毛 +0.5 肉/人
         fur = g->job[DR_JOB_HUNTER];
@@ -327,6 +330,13 @@ bool dr_rules_trade_buy(dr_game_t *g, uint8_t item) {
     return true;
 }
 
+// 陌生人"沉睡→帮忙"(原版 Room.onArrival:玩家回到房间时触发,非自动)
+bool dr_rules_builder_visit(dr_game_t *g) {
+    if (g->builder_lv != DR_BUILDER_SLEEP) return false;
+    g->builder_lv = DR_BUILDER_HELP;
+    return true;
+}
+
 // ---- 周期心跳 ----
 bool dr_rules_tick(dr_rules_rt_t *rt, dr_game_t *g, uint32_t now_ms,
                    dr_rules_event_t *out_ev, uint16_t *out_arg) {
@@ -380,16 +390,15 @@ bool dr_rules_tick(dr_rules_rt_t *rt, dr_game_t *g, uint32_t now_ms,
     }
 
     // 建造者恢复:室温 ≥"暖"后每 30s 推进一态(原版 updateBuilderState)
-    if (g->builder_lv >= DR_BUILDER_DOWN && g->builder_lv < DR_BUILDER_HELP &&
+    // 沉睡→帮忙不走定时器——原版在玩家回到房间时才触发(dr_rules_builder_visit)
+    if (g->builder_lv >= DR_BUILDER_DOWN && g->builder_lv < DR_BUILDER_SLEEP &&
         (int32_t)(now_ms - rt->builder_next_ms) >= 0) {
         rt->builder_next_ms = now_ms + DR_BUILDER_STATE_SECONDS * 1000u;
         if (g->temp_lv >= DR_TEMP_WARM) {
             g->builder_lv++;
             if (out_ev) *out_ev = (g->builder_lv == DR_BUILDER_SHIVER)
                                       ? DR_RT_EV_BUILDER_SHIVER
-                                  : (g->builder_lv == DR_BUILDER_SLEEP)
-                                      ? DR_RT_EV_BUILDER_SLEEP
-                                      : DR_RT_EV_BUILDER_HELP;
+                                      : DR_RT_EV_BUILDER_SLEEP;
             changed = true;
         }
     }

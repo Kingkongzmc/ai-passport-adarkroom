@@ -117,6 +117,9 @@ typedef struct {
 } dr_rules_rt_t;
 
 void dr_rules_rt_init(dr_rules_rt_t *rt, dr_game_t *g, uint32_t now_ms);
+// 陌生人"沉睡→帮忙"的推进(原版发生在玩家回到房间时,onArrival):
+// 进入小屋页时调用;仅在沉睡态生效,返回 true = 恢复为帮忙(应记日志)。
+bool dr_rules_builder_visit(dr_game_t *g);
 // 返回 true = 游戏数据有变化(需要重绘);*out_event 为剧情瞬间文案 id(dr_rules_event_t)。
 typedef enum {
     DR_RT_EV_NONE = 0,
