@@ -209,6 +209,11 @@ static const char *bld_short(int id) {
 // 村庄页签门:森林剧情解锁(原版 unlockForest)
 static bool forest_open(void);
 
+// 第二页签名(原版 a silent forest → village):建小屋前是"森林",之后是"村庄"
+static const char *outside_name(void) {
+    return s.game.building_lv[DR_BLD_HUT] > 0 ? "村庄" : "森林";
+}
+
 static lv_obj_t *label_new(lv_obj_t *parent, const lv_font_t *font,
                            lv_color_t color, int x, int y, int w, int h) {
     lv_obj_t *l = lv_label_create(parent);
@@ -508,6 +513,8 @@ static void render_topbar(const char *title) {
 // 页签渲染:active=当前页(金色下划线),nav=光标所在 tab(-1=不在页签区)。
 // 焦点(完整金框)与所在页(下划线)是两个独立状态,可同时落在同一 tab。
 static void render_tabs(int active, bool village_ok, bool wild_ok, int nav) {
+    // 第二页签名随定居进度变化(原版:森林 → 村庄)
+    lv_label_set_text(s_tablbl[1], outside_name());
     for (int i = 0; i < 4; i++) {
         lv_obj_clear_flag(s_tabs[i], LV_OBJ_FLAG_HIDDEN);
         bool on = (i == active);
@@ -792,7 +799,7 @@ static int8_t village_row_job(int row) {
 }
 
 static void render_village(void) {
-    render_topbar("村庄");
+    render_topbar(outside_name());
     render_tabs(1, true, false, -1);
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     char v[32];
@@ -1490,8 +1497,8 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                 bool go = true;
                 switch (t) {
                     case 0: page_goto(PG_HOME); break;   // 已在小屋:仅退回动作区
-                    case 1: if (s.game.population > 0) page_goto(PG_VILLAGE);
-                            else { log_push("村庄尚未有人定居"); go = false; }
+                    case 1: if (forest_open()) page_goto(PG_VILLAGE);
+                            else { log_push("森林尚未开启"); go = false; }
                             break;
                     case 2: log_push("荒野尚未解锁"); go = false; break;   // M4 解锁
                     case 3: page_goto(PG_SETTINGS); break;
