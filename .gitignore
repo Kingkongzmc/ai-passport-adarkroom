@@ -10,3 +10,7 @@ sim_f*.bmp
 sweep.bmp
 cap.bmp
 capB.bmp
+play.bmp
+sweep2.bmp
+sim_dr_save.bin
+sim_dr_log.bin
