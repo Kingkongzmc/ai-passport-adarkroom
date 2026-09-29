@@ -783,8 +783,11 @@ static void render_build(void) {
     };
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(s_hint, 0, 230);
-    lv_label_set_text(s_hint,
-        s.focus < DR_BLD_KIND_COUNT ? bld_desc[s.focus] : "");
+    if (s.game.temp_lv <= DR_TEMP_COLD)
+        lv_label_set_text(s_hint, "屋里太冷,先点火再建造");   // 施工门槛(原版)
+    else
+        lv_label_set_text(s_hint,
+            s.focus < DR_BLD_KIND_COUNT ? bld_desc[s.focus] : "");
 }
 
 // 村庄页行号 → 职业枚举(行 3..6 可调节)
@@ -1230,7 +1233,11 @@ static void list_action(int idx) {
                          s.game.building_lv[idx]);
                 log_push(line);
                 s.save_pending = true;
-            } else log_push("条件不满足或材料不够");
+            } else if (s.game.temp_lv <= DR_TEMP_COLD) {
+                log_push("屋里太冷,先点火再建造");
+            } else {
+                log_push("材料不够");
+            }
             break;
         case PG_VILLAGE:
             if (idx == 7) { page_goto(PG_HOME); break; }
