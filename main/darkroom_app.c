@@ -148,10 +148,13 @@ static void log_push(const char *text) {
 
 // ---- 日志随档持久化(独立 NVS 键 dr_log;重启后主页日志原样恢复) ----
 // 载荷 = 行数(1B) + 行数×48B(环形缓冲恒紧凑在 [0,cnt))。坏键 = 空日志。
+// 魔数带代际("DLO2"):字库是闭集,旧代固件日志里的字符可能已不在字库内,
+// 恢复会显示乱码——跨代日志一律忽略(玩法重做后旧机制日志无保留价值),
+// 下次存档即被新格式覆盖。
 #pragma pack(push, 1)
 typedef struct { uint32_t magic; uint32_t crc; } dr_log_hdr_t;
 #pragma pack(pop)
-#define DR_LOG_MAGIC 0x474F4C44u   // "DLOG"
+#define DR_LOG_MAGIC 0x324F4C44u   // "DLO2"(DLO1=旧代,弃)
 
 static size_t log_pack(void *buf, size_t cap) {
     size_t payload = 1u + (size_t)s_log_cnt * sizeof(s_logs[0]);
