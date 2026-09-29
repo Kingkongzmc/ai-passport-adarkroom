@@ -214,6 +214,7 @@ static const char *bld_short(int id) {
 // 村庄页签门:森林剧情解锁(原版 unlockForest)
 static bool forest_open(void);
 static bool build_affordable(uint8_t id);   // 建造行足额可付判定
+static bool trade_affordable(uint8_t item); // 贸易行支付能力判定(灰显同源)
 static bool nav_tab_enabled(int i);         // 页签启用表(荒野门)
 
 // 第二页签名(原版 a silent forest → village):建小屋前是"森林",之后是"村庄"
@@ -1083,15 +1084,15 @@ static void render_trade(void) {
     bool compass = (s.game.flags & ((uint64_t)1u << DR_FLAG_COMPASS)) != 0;
     char v[28];
     if (post) {
-        snprintf(v, sizeof(v), "%u毛", 150u);  set_row(0, 52, "买 鳞", v, s.focus == 0, s.game.res[DR_RES_FUR] < 150u);
-        snprintf(v, sizeof(v), "%u毛", 300u);  set_row(1, 75, "买 牙", v, s.focus == 1, s.game.res[DR_RES_FUR] < 300u);
-        snprintf(v, sizeof(v), "%u毛%u鳞", 150u, 50u); set_row(2, 98, "买 铁", v, s.focus == 2, false);
-        snprintf(v, sizeof(v), "%u毛%u牙", 200u, 50u); set_row(3, 121, "买 煤", v, s.focus == 3, false);
-        snprintf(v, sizeof(v), "%u毛%u鳞%u牙", 300u, 50u, 50u); set_row(4, 144, "买 钢", v, s.focus == 4, false);
-        snprintf(v, sizeof(v), "%u鳞", 10u);   set_row(5, 167, "买 子弹", v, s.focus == 5, s.game.res[DR_RES_SCALES] < 10u);
+        snprintf(v, sizeof(v), "%u毛", 150u);  set_row(0, 52, "买 鳞", v, s.focus == 0, !trade_affordable(0));
+        snprintf(v, sizeof(v), "%u毛", 300u);  set_row(1, 75, "买 牙", v, s.focus == 1, !trade_affordable(1));
+        snprintf(v, sizeof(v), "%u毛%u鳞", 150u, 50u); set_row(2, 98, "买 铁", v, s.focus == 2, !trade_affordable(2));
+        snprintf(v, sizeof(v), "%u毛%u牙", 200u, 50u); set_row(3, 121, "买 煤", v, s.focus == 3, !trade_affordable(3));
+        snprintf(v, sizeof(v), "%u毛%u鳞%u牙", 300u, 50u, 50u); set_row(4, 144, "买 钢", v, s.focus == 4, !trade_affordable(4));
+        snprintf(v, sizeof(v), "%u鳞", 10u);   set_row(5, 167, "买 子弹", v, s.focus == 5, !trade_affordable(5));
         if (compass) snprintf(v, sizeof(v), "已购");
         else         snprintf(v, sizeof(v), "%u毛%u鳞%u牙", 400u, 20u, 10u);
-        set_row(6, 190, "买 罗盘", v, s.focus == 6, compass);
+        set_row(6, 190, "买 罗盘", v, s.focus == 6, !trade_affordable(6));
         set_row(7, 213, "返回", "", s.focus == 7, false);
     } else {
         for (int i = 0; i < 7; i++) set_row(i, 52 + i * 23, "—", "需贸易站", false, true);
