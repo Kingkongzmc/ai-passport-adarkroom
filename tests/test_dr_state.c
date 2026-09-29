@@ -130,16 +130,18 @@ static void test_v1_migration(void) {
     g.res_total[DR_RES_WOOD] = 300;
     g.population = 5;
     g.flags = 0x3;
-    g.building_lv[2] = 3;
-    g.job[DR_JOB_LUMBER] = 2;
+    g.building_lv[2] = 3;   // 有小屋 → 迁移后森林标记兜底
+    // 旧职业枚举(LUMBER=0,HUNTER=1,TANNER=2,SMITH=3)填 job[](pack 原样拷贝)
+    g.job[0] = 2;   // 旧伐木工(迁移后并入采集者=消失)
+    g.job[1] = 3;   // 旧猎人 → 新 HUNTER(0)
+    g.job[2] = 1;   // 旧制革匠 → 新 TANNER(2)
     g.fire_lv = DR_FIRE_BURNING;
     // v1 没有的字段塞上"脏值":迁移后必须归零,证明新槽位是零填充而非穿帮
     g.res[DR_RES_LEATHER] = 999;
     g.res_total[DR_RES_LEATHER] = 999;
     g.armor_lv = 1;
-    g.trap_bait_on = 1;
 
-    uint8_t blob[512];
+    uint8_t blob[520];
     size_t n = dr_state_pack_v1(&g, blob, sizeof(blob));
     assert(n == sizeof(dr_save_hdr_t) + 460u);   // v1 镜像 = 头 12 + 体 460
     dr_game_t out;
@@ -147,11 +149,36 @@ static void test_v1_migration(void) {
     assert(out.saved_at_ts == 1000);
     assert(out.res[DR_RES_WOOD] == 77 && out.res[DR_RES_FUR] == 12);
     assert(out.res_total[DR_RES_WOOD] == 300);
-    assert(out.population == 5 && out.flags == 0x3);
-    assert(out.building_lv[2] == 3 && out.job[DR_JOB_LUMBER] == 2);
+    assert(out.population == 5 && (out.flags & 0x3) == 0x3);
+    assert(out.building_lv[2] == 3);
+    assert(out.job[DR_JOB_HUNTER] == 3 && out.job[DR_JOB_TANNER] == 1);
+    assert(out.job[DR_JOB_TRAPPER] == 0 && out.job[DR_JOB_CHARCUTIER] == 0);
     assert(out.fire_lv == DR_FIRE_BURNING);
     assert(out.res[DR_RES_LEATHER] == 0 && out.res_total[DR_RES_LEATHER] == 0);
+    assert(out.res[DR_RES_SCALES] == 0 && out.res[DR_RES_TEETH] == 0 &&
+           out.res[DR_RES_CLOTH] == 0);
     assert(out.armor_lv == 0 && out.trap_bait_on == 0);
+    assert(out.builder_lv == DR_BUILDER_HELP);            // 老档:陌生人已恢复
+    assert(out.temp_lv == DR_FIRE_BURNING);                // 温度按火焰档初始化
+    assert((out.flags & ((uint64_t)1u << DR_FLAG_FOREST)) != 0);  // 森林兜底解锁
+
+    // v2 镜像(未发布的中间版)同样迁移:pack_v2 按新枚举重排到旧槽,迁移后还原
+    dr_game_t g2;
+    dr_game_init(&g2, 4242, 1000);
+    g2.res[DR_RES_WOOD] = 77;
+    g2.res[DR_RES_LEATHER] = 7;
+    g2.population = 5;
+    g2.job[DR_JOB_HUNTER] = 3;    // 新枚举:猎人槽 0
+    g2.job[DR_JOB_TANNER] = 1;    // 制革槽 2
+    g2.building_lv[2] = 1;
+    g2.fire_lv = DR_FIRE_BURNING;
+    size_t n2 = dr_state_pack_v2(&g2, blob, sizeof(blob));
+    assert(n2 == sizeof(dr_save_hdr_t) + 472u);
+    dr_game_t out2;
+    assert(dr_state_load(blob, n2, &out2));
+    assert(out2.res[DR_RES_LEATHER] == 7);
+    assert(out2.job[DR_JOB_HUNTER] == 3 && out2.job[DR_JOB_TANNER] == 1);
+    assert(out2.builder_lv == DR_BUILDER_HELP && out2.temp_lv == DR_FIRE_BURNING);
 
     // 截断 / 篡改 / 垃圾头 → 拒绝(坏档不落进迁移路径)
     assert(!dr_state_load(blob, n - 1, &out));

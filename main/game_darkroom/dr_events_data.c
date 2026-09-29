@@ -1,5 +1,8 @@
-// main/game_darkroom/dr_events_data.c —— 事件表(M1 种子版,M6 全量灌装)。
+// main/game_darkroom/dr_events_data.c —— 事件表(M6 全量灌装)。
 // 纯数据,无逻辑;文案引用 dr_text.h 的 id。
+// v3 起"陌生人"不再走事件对话框——对齐原版:陌生人(建造者)是规则层状态机
+// (晕倒→发抖→沉睡→帮忙,室温驱动,见 dr_rules.c),无玩家选择分支。
+// 引擎与文案 id 保留,M6 按原版 events.js 灌装 50~70 条。
 #include "dr_events.h"
 
 #define C(op, a1, a2) { (uint8_t)(op), (a1), (a2) }
@@ -8,23 +11,7 @@
 #define EFF_NONE  E(DR_EFF_NONE, 0, 0)
 
 static const dr_event_t k_events[] = {
-    // id 0:开场剧情——陌生人到来(一次性,主页,木材>=10 时触发)。
-    // 留下:人口+1、置标记0;赶走:置标记1、获得木材(她留下的柴)。
-    {
-        .text_id = DR_T_EV_STRANGER_1,
-        .scene_mask = DR_SCENE_HOME,
-        .priority = 10,
-        .max_seen = 1,
-        .cooldown_s = 0,
-        .conds = { C(DR_COND_RES_GE, DR_RES_WOOD, 10), COND_NONE, COND_NONE, COND_NONE },
-        .choices = {
-            { DR_T_EV_STRANGER_1_C0, { E(DR_EFF_POP_ADD, 0, 1),
-                                       E(DR_EFF_FLAG_SET, 0, 0) } },
-            { DR_T_EV_STRANGER_1_C1, { E(DR_EFF_RES_ADD, DR_RES_WOOD, 5),
-                                       E(DR_EFF_FLAG_SET, 1, 0) } },
-        },
-        .choice_count = 2,
-    },
+    // (空表:M6 灌装;开场剧情由规则层建造者状态机承担)
 };
 
 const dr_event_t *dr_events_table(uint16_t *count) {

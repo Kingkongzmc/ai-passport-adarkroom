@@ -84,3 +84,29 @@ int dr_port_load(dr_game_t *g, bool *out_loaded) {
              (unsigned)len, (unsigned)DR_SAVE_VERSION);
     return 0;
 }
+
+// ---- 日志环形缓冲(独立键;内容为 UI 层自定义 blob,本层只管存取) ----
+int dr_port_log_save(const void *blob, size_t len) {
+    nvs_handle_t h;
+    esp_err_t err = nvs_open("darkroom", NVS_READWRITE, &h);
+    if (err != ESP_OK) return (int)err;
+    err = nvs_set_blob(h, "dr_log", blob, len);
+    if (err == ESP_OK) err = nvs_commit(h);
+    nvs_close(h);
+    return (int)err;
+}
+
+int dr_port_log_load(void *buf, size_t cap, size_t *out_len) {
+    *out_len = 0;
+    nvs_handle_t h;
+    esp_err_t err = nvs_open("darkroom", NVS_READONLY, &h);
+    if (err == ESP_ERR_NVS_NOT_FOUND) return 0;
+    if (err != ESP_OK) return (int)err;
+    size_t len = cap;
+    err = nvs_get_blob(h, "dr_log", buf, &len);
+    nvs_close(h);
+    if (err == ESP_ERR_NVS_NOT_FOUND) return 0;   // 无日志键:空日志
+    if (err != ESP_OK) return (int)err;
+    *out_len = len;
+    return 0;
+}

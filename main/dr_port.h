@@ -6,6 +6,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "dr_state.h"
@@ -27,6 +28,11 @@ int dr_port_save(const dr_game_t *g);
 // NVS → 档。*out_loaded=false 且返回 0 表示空档(调用方自行 init 新档)。
 // CRC/版本失败同样返回空档并打日志(坏档重开,不阻塞游戏)。
 int dr_port_load(dr_game_t *g, bool *out_loaded);
+
+// 日志环形缓冲持久化(独立 NVS 键 dr_log,与主档互不影响;本键损坏或缺失
+// = 日志为空,绝不阻塞游戏)。写入原样 blob;读取返回实际长度。
+int dr_port_log_save(const void *blob, size_t len);
+int dr_port_log_load(void *buf, size_t cap, size_t *out_len);
 
 #ifdef __cplusplus
 }

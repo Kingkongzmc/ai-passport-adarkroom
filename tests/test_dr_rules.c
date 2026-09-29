@@ -1,468 +1,406 @@
-// tests/test_dr_rules.c —— 第一/二幕规则主机测试:火焰/生火、建造链与造价、
-// 陷阱结算与 RNG 回写、人口上限、口粮与罢工、制革匠、诱饵、贸易与皮甲。
+// tests/test_dr_rules.c —— 规则层主机测试(对齐原版口径):
+// 建筑造价/火焰/温度/建造者剧情/采集/陷阱六档/职业收入/流浪者/贸易/离线。
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "dr_rules.h"
+#include "dr_state.h"
 #include "dr_util.h"
 
-static void test_fire_cycle(void) {
-    dr_game_t g;
-    dr_game_init(&g, 1, 1000);
-    assert(g.fire_lv == DR_FIRE_DEAD);
-
-    // 点火(从熄灭):不足 5 木失败;够则 5 木直接到"旺盛"(原版 lightFire)
-    assert(!dr_rules_stoke_fire(&g, 1000));
-    g.res[DR_RES_WOOD] = 4;
-    assert(!dr_rules_stoke_fire(&g, 1000));
-    g.res[DR_RES_WOOD] = 100;
-    assert(dr_rules_stoke_fire(&g, 1000));
-    assert(g.fire_lv == DR_FIRE_BURNING);
-    assert(g.res[DR_RES_WOOD] == 100 - DR_FIRE_LIGHT_COST);
-
-    // 添柴:1 木 +1 档,封顶"炽烈"
-    assert(dr_rules_stoke_fire(&g, 1000));
-    assert(g.fire_lv == DR_FIRE_ROARING);
-    assert(g.res[DR_RES_WOOD] == 100 - DR_FIRE_LIGHT_COST - DR_FIRE_STOKE_COST);
-    assert(dr_rules_stoke_fire(&g, 1000));   // 已封顶,仍扣 1 木(原版行为)
-    assert(g.fire_lv == DR_FIRE_ROARING);
-
-    dr_rules_rt_t rt;
-    dr_rules_rt_init(&rt, &g, 0);
-
-    // 5 分钟降一档;逐档到熄灭(期间 10s 经济 tick 也会置 changed,只看火焰档)
-    bool fire_out = false;
-    dr_rules_tick(&rt, &g, (DR_FIRE_LEVEL_SECONDS - 1) * 1000, &fire_out);
-    assert(g.fire_lv == DR_FIRE_ROARING);
-    assert(dr_rules_tick(&rt, &g, (DR_FIRE_LEVEL_SECONDS + 1) * 1000,
-                         &fire_out) && fire_out);
-    assert(g.fire_lv == DR_FIRE_BURNING);
+// ---- 建筑造价(原版 Craftables) ----
+static void test_building_costs(void) {
+    dr_bld_cost_t c;
+    c = dr_building_cost(DR_BLD_TRAP, 0);        assert(c.wood == 10 && !c.fur && !c.meat);
+    c = dr_building_cost(DR_BLD_TRAP, 3);        assert(c.wood == 40);
+    c = dr_building_cost(DR_BLD_TRAP, 10);       assert(c.wood == 0xFFFFFFFFu);  // max10
+    c = dr_building_cost(DR_BLD_CART, 0);        assert(c.wood == 30);
+    c = dr_building_cost(DR_BLD_CART, 1);        assert(c.wood == 0xFFFFFFFFu);
+    c = dr_building_cost(DR_BLD_HUT, 0);         assert(c.wood == 100);
+    c = dr_building_cost(DR_BLD_HUT, 2);         assert(c.wood == 200);
+    c = dr_building_cost(DR_BLD_HUT, 20);        assert(c.wood == 0xFFFFFFFFu);
+    c = dr_building_cost(DR_BLD_LODGE, 0);       assert(c.wood == 200 && c.fur == 10 && c.meat == 5);
+    c = dr_building_cost(DR_BLD_TRADE_POST, 0);  assert(c.wood == 400 && c.fur == 100);
+    c = dr_building_cost(DR_BLD_TANNERY, 0);     assert(c.wood == 500 && c.fur == 50);
+    c = dr_building_cost(DR_BLD_SMOKEHOUSE, 0);  assert(c.wood == 600 && c.meat == 50);
 }
 
+// 建造门槛:建造者已帮忙 + 木材过半 + 材料见过;施工需室温>冷
+static void test_build_gates(void) {
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    g.res[DR_RES_WOOD] = 1000;
+    assert(!dr_rules_can_build(&g, DR_BLD_TRAP));   // 建造者未恢复
+    g.builder_lv = DR_BUILDER_HELP;
+    assert(dr_rules_can_build(&g, DR_BLD_TRAP));
+
+    // 木材过半门槛:陷阱首件 10 木,5 木即可见
+    g.res[DR_RES_WOOD] = 5;
+    assert(dr_rules_can_build(&g, DR_BLD_TRAP));
+    g.res[DR_RES_WOOD] = 4;
+    assert(!dr_rules_can_build(&g, DR_BLD_TRAP));
+
+    // 材料见过:猎人小屋要毛 10>0 且肉 5>0 才可见
+    g.res[DR_RES_WOOD] = 1000;
+    g.res[DR_RES_FUR] = 0; g.res[DR_RES_MEAT] = 5;
+    assert(!dr_rules_can_build(&g, DR_BLD_LODGE));
+    g.res[DR_RES_FUR] = 1;
+    assert(dr_rules_can_build(&g, DR_BLD_LODGE));
+
+    // 施工需室温>冷(原版:她正打寒战没法帮忙)
+    g.res[DR_RES_WOOD] = 1000; g.res[DR_RES_FUR] = 10; g.res[DR_RES_MEAT] = 5;
+    g.temp_lv = DR_TEMP_COLD;
+    assert(!dr_rules_build(&g, DR_BLD_LODGE, 1000));
+    g.temp_lv = DR_TEMP_MILD;
+    assert(dr_rules_build(&g, DR_BLD_LODGE, 1000));
+    assert(g.building_lv[DR_BLD_LODGE] == 1);
+    assert(g.res[DR_RES_WOOD] == 800 && g.res[DR_RES_FUR] == 0 && g.res[DR_RES_MEAT] == 0);
+    assert(g.population == 0);                      // 建房不加人口(原版)
+}
+
+// ---- 火焰:点火 5 木直达旺盛;添柴 1 木 +1 档;降档时建造者代添 ----
+static void test_fire(void) {
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    g.res[DR_RES_WOOD] = 10;
+    assert(dr_rules_stoke_fire(&g, 1000));
+    assert(g.fire_lv == DR_FIRE_BURNING && g.res[DR_RES_WOOD] == 5);
+    assert(dr_rules_stoke_fire(&g, 1000));
+    assert(g.fire_lv == DR_FIRE_ROARING && g.res[DR_RES_WOOD] == 4);
+    assert(dr_rules_stoke_fire(&g, 1000));           // 封顶炽烈仍耗 1 木
+    assert(g.fire_lv == DR_FIRE_ROARING && g.res[DR_RES_WOOD] == 3);
+
+    // 降档:无建造者 → 常规 -1;火焰首次 ≥跳动同时触发陌生人入场(叙事优先)
+    dr_rules_rt_t rt;
+    dr_rules_rt_init(&rt, &g, 0);
+    dr_rules_event_t ev; uint16_t arg;
+    assert(dr_rules_tick(&rt, &g, 300u * 1000u, &ev, &arg));
+    assert(g.fire_lv == DR_FIRE_BURNING && ev == DR_RT_EV_BUILDER_IN);
+
+    // 建造者帮忙 + 火将熄 + 有木 → 先代添 1 木再降(净持平)
+    g.builder_lv = DR_BUILDER_HELP;
+    rt.forest_unlock_ms = 0;   // 剧情线已过(手动置 HELP),关掉待解锁
+    g.res[DR_RES_WOOD] = 5;
+    g.fire_lv = DR_FIRE_FLICKERING;
+    rt.fire_deadline_ms = 600u * 1000u;
+    assert(dr_rules_tick(&rt, &g, 600u * 1000u, &ev, &arg));
+    assert(ev == DR_RT_EV_BUILDER_STOKE);
+    assert(g.fire_lv == DR_FIRE_FLICKERING);          // +1(代添) 后 -1
+    assert(g.res[DR_RES_WOOD] == 6);                  // 5-1(代添) +2(建造者当 tick 收入)
+}
+
+// ---- 温度:每 30s 向火焰档移动一步 ----
+static void test_temperature(void) {
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    g.fire_lv = DR_FIRE_ROARING;
+    dr_rules_rt_t rt;
+    dr_rules_rt_init(&rt, &g, 0);
+    dr_rules_event_t ev; uint16_t arg;
+    for (int i = 1; i <= 4; i++) {
+        (void)dr_rules_tick(&rt, &g, (uint32_t)(i * 31) * 1000u, &ev, &arg);
+        assert(g.temp_lv == (uint8_t)i);              // 冻结→热,逐步
+    }
+    g.fire_lv = DR_FIRE_DEAD;
+    (void)dr_rules_tick(&rt, &g, 130u * 1000u, &ev, &arg);
+    assert(g.temp_lv == DR_TEMP_HOT);                 // 周期未到(下次 154s)不动
+    (void)dr_rules_tick(&rt, &g, 160u * 1000u, &ev, &arg);
+    assert(g.temp_lv == DR_TEMP_WARM);                // 开始回落
+}
+
+// ---- 建造者剧情:火≥跳动入场 → 15s 森林解锁(木=4) → 室温暖后三态恢复 ----
+static void test_builder_arc(void) {
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    g.res[DR_RES_WOOD] = 100;
+    dr_rules_rt_t rt;
+    dr_rules_rt_init(&rt, &g, 0);
+    dr_rules_event_t ev; uint16_t arg;
+
+    // 火到"跳动" → 陌生人晕倒
+    g.fire_lv = DR_FIRE_FLICKERING;
+    assert(dr_rules_tick(&rt, &g, 1000, &ev, &arg));
+    assert(g.builder_lv == DR_BUILDER_DOWN && ev == DR_RT_EV_BUILDER_IN);
+
+    // 15s 后:森林解锁,木材被置为 4(原版 unlockForest)
+    (void)dr_rules_tick(&rt, &g, 16000, &ev, &arg);
+    assert(ev == DR_RT_EV_FOREST);
+    assert((g.flags & ((uint64_t)1u << DR_FLAG_FOREST)) != 0);
+    assert(g.res[DR_RES_WOOD] == 4);
+
+    // 室温不够:状态不推进
+    g.temp_lv = DR_TEMP_MILD;
+    (void)dr_rules_tick(&rt, &g, 60000, &ev, &arg);
+    assert(g.builder_lv == DR_BUILDER_DOWN);
+
+    // 室温暖(火保持旺盛,否则调温会把室温拉回去):每 30s 一态 → 发抖 → 沉睡 → 帮忙
+    g.fire_lv = DR_FIRE_BURNING;
+    g.temp_lv = DR_TEMP_WARM;
+    (void)dr_rules_tick(&rt, &g, 91000, &ev, &arg);
+    assert(g.builder_lv == DR_BUILDER_SHIVER && ev == DR_RT_EV_BUILDER_SHIVER);
+    (void)dr_rules_tick(&rt, &g, 121000, &ev, &arg);
+    assert(g.builder_lv == DR_BUILDER_SLEEP && ev == DR_RT_EV_BUILDER_SLEEP);
+    (void)dr_rules_tick(&rt, &g, 151000, &ev, &arg);
+    assert(g.builder_lv == DR_BUILDER_HELP && ev == DR_RT_EV_BUILDER_HELP);
+}
+
+// ---- 采集:+10 木;板车后 +50(原版 gatherWood) ----
+static void test_gather(void) {
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    dr_rules_gather(&g, 1000);
+    assert(g.res[DR_RES_WOOD] == 25 && g.res_total[DR_RES_WOOD] == 25);
+    g.building_lv[DR_BLD_CART] = 1;
+    dr_rules_gather(&g, 1000);
+    assert(g.res[DR_RES_WOOD] == 75 && g.res_total[DR_RES_WOOD] == 75);
+}
+
+// ---- 陷阱:90s 冷却;每陷阱必得 1 件六档表;饵自动 min(饵,陷阱数) ----
+static void test_trap(void) {
+    dr_game_t g;
+    dr_game_init(&g, 7, 1000);
+    g.building_lv[DR_BLD_TRAP] = 2;   // 2 陷阱
+    dr_rules_rt_t rt;
+    dr_rules_rt_init(&rt, &g, 0);
+    dr_trap_yield_t y;
+
+    // 冷却未到
+    assert(!dr_rules_trap_ready(&rt, &g, 89u * 1000u));
+    assert(!dr_rules_trap_check(&rt, &g, 89u * 1000u, &y));
+
+    // 首查:2 陷阱 + 3 饵 → 耗 2 饵,共 4 件
+    g.res[DR_RES_BAIT] = 3;
+    assert(dr_rules_trap_check(&rt, &g, 90u * 1000u, &y));
+    assert(y.bait == 2 && g.res[DR_RES_BAIT] == 1);
+    assert(y.fur + y.meat + y.scales + y.teeth + y.cloth + y.charm == 4);
+
+    // 统计:400 次结算(饵已清,每次恰好 2 件),各档占比贴近原版表
+    g.res[DR_RES_BAIT] = 0;
+    uint32_t cnt[6] = {0};
+    for (uint32_t k = 1; k <= 400; k++) {
+        assert(dr_rules_trap_check(&rt, &g, 90u * 1000u + k * 90u * 1000u, &y));
+        assert(y.fur + y.meat + y.scales + y.teeth + y.cloth + y.charm == 2);
+        cnt[0] += y.fur; cnt[1] += y.meat; cnt[2] += y.scales;
+        cnt[3] += y.teeth; cnt[4] += y.cloth; cnt[5] += y.charm;
+    }
+    // 800 件:毛期望 400±3σ≈±25;肉期望 200±3σ≈±22;杂项期望 200
+    assert(cnt[0] >= 360 && cnt[0] <= 440);
+    assert(cnt[1] >= 155 && cnt[1] <= 245);
+    assert(cnt[2] + cnt[3] + cnt[4] + cnt[5] >= 140 &&
+           cnt[2] + cnt[3] + cnt[4] + cnt[5] <= 260);
+    assert(g.rng_seed_state == rt.rng.s);     // 序列回写档
+
+    // 确定性:同种子同起点,逐次结果完全一致
+    dr_game_t g2;
+    dr_game_init(&g2, 7, 1000);
+    g2.building_lv[DR_BLD_TRAP] = 2;
+    dr_rules_rt_t rt2;
+    dr_rules_rt_init(&rt2, &g2, 0);
+    dr_game_t g3;
+    dr_game_init(&g3, 7, 1000);
+    g3.building_lv[DR_BLD_TRAP] = 2;
+    dr_rules_rt_t rt3;
+    dr_rules_rt_init(&rt3, &g3, 0);
+    for (uint32_t k = 0; k < 10; k++) {
+        dr_trap_yield_t ya, yb;
+        dr_rules_trap_check(&rt2, &g2, (90u + k * 90u) * 1000u, &ya);
+        dr_rules_trap_check(&rt3, &g3, (90u + k * 90u) * 1000u, &yb);
+        assert(memcmp(&ya, &yb, sizeof(ya)) == 0);
+    }
+    assert(memcmp(&g2, &g3, sizeof(g2)) == 0);
+}
+
+// ---- 职业:解锁门/分配/闲人 ----
 static void test_jobs(void) {
     dr_game_t g;
     dr_game_init(&g, 1, 1000);
-    g.population = 3;
-    assert(dr_rules_job_idle(&g) == 3);
-
-    // 解锁:伐木工常开;猎人需猎人小屋;制革匠需制革坊;铁匠 M4
-    assert(dr_rules_job_unlocked(&g, DR_JOB_LUMBER));
-    assert(!dr_rules_job_unlocked(&g, DR_JOB_HUNTER));
-    assert(!dr_rules_job_unlocked(&g, DR_JOB_TANNER));
+    g.population = 4;
+    assert(dr_rules_job_idle(&g) == 4);
+    assert(!dr_rules_job_unlocked(&g, DR_JOB_HUNTER));     // 需猎人小屋
     assert(!dr_rules_job_assign(&g, DR_JOB_HUNTER, 1));
     g.building_lv[DR_BLD_LODGE] = 1;
     assert(dr_rules_job_unlocked(&g, DR_JOB_HUNTER));
-    assert(!dr_rules_job_unlocked(&g, DR_JOB_TANNER));
+    assert(dr_rules_job_unlocked(&g, DR_JOB_TRAPPER));     // 捕兽人同挂猎屋(原版)
+    assert(!dr_rules_job_unlocked(&g, DR_JOB_TANNER));     // 需制革坊
+    assert(!dr_rules_job_unlocked(&g, DR_JOB_CHARCUTIER)); // 需熏肉房
     g.building_lv[DR_BLD_TANNERY] = 1;
+    g.building_lv[DR_BLD_SMOKEHOUSE] = 1;
     assert(dr_rules_job_unlocked(&g, DR_JOB_TANNER));
-    assert(!dr_rules_job_unlocked(&g, DR_JOB_SMITH));   // 铁匠 M4
+    assert(dr_rules_job_unlocked(&g, DR_JOB_CHARCUTIER));
 
-    // 分配/撤下与超员
-    assert(dr_rules_job_assign(&g, DR_JOB_LUMBER, 2));
-    assert(dr_rules_job_assign(&g, DR_JOB_HUNTER, 1));
-    assert(dr_rules_job_idle(&g) == 0);
-    assert(!dr_rules_job_assign(&g, DR_JOB_LUMBER, 1));   // 没有闲人
-    assert(dr_rules_job_assign(&g, DR_JOB_HUNTER, -1));
-    assert(dr_rules_job_idle(&g) == 1);
-    assert(dr_rules_job_assign(&g, DR_JOB_HUNTER, -5));   // 撤到 0 钳制
-    assert(g.job[DR_JOB_HUNTER] == 0);
-
-    // 产出(每 10s 经济 tick,先吃后产):备足口粮。此刻 job:伐木2 猎人0,闲人1。
-    // 木 = 闲人1 + 伐木2×2;食 = -3(吃) + 1(采集者);猎人 0 人无毛肉。
-    g.res[DR_RES_FOOD] = 100;
-    dr_rules_rt_t rt;
-    dr_rules_rt_init(&rt, &g, 0);
-    uint32_t wood0 = g.res[DR_RES_WOOD];
-    uint32_t food0 = g.res[DR_RES_FOOD];
-    assert(dr_rules_tick(&rt, &g, 10u * 1000u, 0));
-    assert(g.res[DR_RES_WOOD] == wood0 + 1 + 2 * 2);
-    assert(g.res[DR_RES_FOOD] == food0 - 3 + 1);
-    assert(g.res[DR_RES_FUR] == 0 && g.res[DR_RES_MEAT] == 0);
-    assert(dr_rules_job_assign(&g, DR_JOB_HUNTER, 1));     // 闲人0
-    assert(dr_rules_tick(&rt, &g, 20u * 1000u, 0));
-    assert(g.res[DR_RES_FUR] == 1 && g.res[DR_RES_MEAT] == 2);   // +1毛 +2肉
-    assert(g.res[DR_RES_WOOD] == wood0 + 5 + 4);           // 第二 tick 无闲人
+    assert(dr_rules_job_assign(&g, DR_JOB_HUNTER, 2));
+    assert(!dr_rules_job_assign(&g, DR_JOB_HUNTER, 3));    // 超员
+    assert(dr_rules_job_idle(&g) == 2);
+    assert(dr_rules_job_assign(&g, DR_JOB_HUNTER, -5));    // 负数钳 0
+    assert(g.job[DR_JOB_HUNTER] == 0 && dr_rules_job_idle(&g) == 4);
 }
 
-static void test_food_economy(void) {
-    dr_game_t g;
-    dr_game_init(&g, 3, 1000);
-    dr_rules_rt_t rt;
-    dr_rules_rt_init(&rt, &g, 0);
-
-    // 采集者自给:pop1 闲人,吃 1 食,产 1 食 1 木 → 食持平
-    g.population = 1;
-    g.res[DR_RES_FOOD] = 2;
-    assert(dr_rules_tick(&rt, &g, 10u * 1000u, 0));
-    assert(g.res[DR_RES_FOOD] == 2);
-    assert(g.res[DR_RES_WOOD] == 1);
-    assert(!dr_rules_starving(&g));
-
-    // 食物不足先扣食再扣肉:pop2 闲人,1 食 2 肉 → 吃 1食+1肉,产 2 食 2 木
-    g.population = 2;
-    g.res[DR_RES_FOOD] = 1;
-    g.res[DR_RES_MEAT] = 2;
-    uint32_t wood0 = g.res[DR_RES_WOOD];
-    assert(dr_rules_tick(&rt, &g, 20u * 1000u, 0));
-    assert(g.res[DR_RES_FOOD] == 2 && g.res[DR_RES_MEAT] == 1);
-    assert(g.res[DR_RES_WOOD] == wood0 + 2);
-
-    // 断粮罢工:pop2 全是伐木工,食肉皆空 → 岗位停工,无闲人拾荒 → 持续断粮
-    g.population = 2;
-    g.job[DR_JOB_LUMBER] = 2;
-    g.res[DR_RES_FOOD] = 0;
-    g.res[DR_RES_MEAT] = 0;
-    wood0 = g.res[DR_RES_WOOD];
-    assert(dr_rules_starving(&g));
-    assert(dr_rules_tick(&rt, &g, 30u * 1000u, 0));
-    assert(g.res[DR_RES_WOOD] == wood0);      // 罢工:伐木工不出木
-    assert(g.res[DR_RES_FOOD] == 0);          // 无闲人:拾荒也无食
-    assert(dr_rules_starving(&g));
-
-    // 恢复:手动收陷阱喂 2 肉(玩家操作),下一 tick 吃掉并复工
-    g.res[DR_RES_MEAT] = 2;
-    assert(!dr_rules_starving(&g));
-    assert(dr_rules_tick(&rt, &g, 40u * 1000u, 0));
-    assert(g.res[DR_RES_MEAT] == 0 && g.res[DR_RES_FOOD] == 0);
-    assert(g.res[DR_RES_WOOD] == wood0 + 4);  // 伐木2×2 复工
-    assert(dr_rules_starving(&g));            // 又吃空了:压力仍在(设计内)
-
-    // 罢工时闲人拾荒求生:pop2 = 伐木1 + 闲人1 → 每 tick +1 食(无木)
-    g.job[DR_JOB_LUMBER] = 1;
-    g.res[DR_RES_FOOD] = 0;
-    g.res[DR_RES_MEAT] = 0;
-    wood0 = g.res[DR_RES_WOOD];
-    assert(dr_rules_tick(&rt, &g, 50u * 1000u, 0));
-    assert(g.res[DR_RES_FOOD] == 1);          // 拾荒 +1
-    assert(g.res[DR_RES_WOOD] == wood0);      // 不出木
-}
-
-static void test_tanner(void) {
-    dr_game_t g;
-    dr_game_init(&g, 5, 1000);
-    g.population = 2;
-    g.building_lv[DR_BLD_TANNERY] = 1;
-    g.res[DR_RES_FOOD] = 100;
-    assert(dr_rules_job_assign(&g, DR_JOB_TANNER, 1));
-    assert(dr_rules_job_assign(&g, DR_JOB_LUMBER, 1));   // 闲人 0
-
-    dr_rules_rt_t rt;
-    dr_rules_rt_init(&rt, &g, 0);
-    g.res[DR_RES_FUR] = 5;
-    assert(dr_rules_tick(&rt, &g, 10u * 1000u, 0));
-    assert(g.res[DR_RES_LEATHER] == 1);        // 2 毛 → 1 革
-    assert(g.res[DR_RES_FUR] == 3);
-    assert(g.res[DR_RES_LEATHER] == g.res_total[DR_RES_LEATHER]);
-
-    // 毛不够当 tick 空转:1 毛不转化
-    g.res[DR_RES_FUR] = 1;
-    assert(dr_rules_tick(&rt, &g, 20u * 1000u, 0));
-    assert(g.res[DR_RES_LEATHER] == 1 && g.res[DR_RES_FUR] == 1);
-}
-
-static void test_build_chain(void) {
+// ---- 收入(原版 _INCOME 每 10s):采集者+建造者+猎人半率 ----
+static void test_income_production(void) {
     dr_game_t g;
     dr_game_init(&g, 1, 1000);
-    g.res[DR_RES_WOOD] = 1000;
-
-    // 前置链:陷阱需要板车;小屋需要陷阱
-    assert(!dr_rules_can_build(&g, DR_BLD_TRAP));
-    assert(dr_rules_build(&g, DR_BLD_CART, 1000));
-    assert(dr_rules_build(&g, DR_BLD_TRAP, 1000));
-    assert(!dr_rules_can_build(&g, DR_BLD_HUT) == false);
-    assert(dr_rules_build(&g, DR_BLD_HUT, 1000));
-
-    // 小屋人口:每级 +2 上限,定居钳到上限
-    assert(g.population == 2);
-    assert(dr_rules_pop_cap(&g) == 2);
-
-    // 木材被实扣(1000 - 10 - 15 - 20)
-    assert(g.res[DR_RES_WOOD] == 1000 - 10 - 15 - 20);
-
-    // 额外条件:猎人小屋(150木+10毛+5肉)、贸易站(300木+20毛)
-    g.population = 2;   // 过小屋前置
-    assert(!dr_rules_can_build(&g, DR_BLD_LODGE));   // 缺毛/肉
-    g.res[DR_RES_FUR] = 10;
-    g.res[DR_RES_MEAT] = 4;
-    assert(!dr_rules_can_build(&g, DR_BLD_LODGE));   // 肉不够
-    g.res[DR_RES_MEAT] = 5;
-    assert(dr_rules_can_build(&g, DR_BLD_LODGE));
-    uint32_t wood0 = g.res[DR_RES_WOOD];
-    assert(dr_rules_build(&g, DR_BLD_LODGE, 1000));
-    assert(g.res[DR_RES_WOOD] == wood0 - 150u);
-    assert(g.res[DR_RES_FUR] == 0 && g.res[DR_RES_MEAT] == 0);
-
-    // 制革坊:前置猎人小屋;120木+10毛
-    assert(!dr_rules_can_build(&g, DR_BLD_TANNERY));   // 缺 10 毛
-    g.res[DR_RES_FUR] = 9;
-    assert(!dr_rules_can_build(&g, DR_BLD_TANNERY));
-    g.res[DR_RES_FUR] = 10;
-    assert(dr_rules_can_build(&g, DR_BLD_TANNERY));
-    wood0 = g.res[DR_RES_WOOD];
-    assert(dr_rules_build(&g, DR_BLD_TANNERY, 1000));
-    assert(g.res[DR_RES_WOOD] == wood0 - 120u);
-    assert(g.res[DR_RES_FUR] == 0);
-
-    assert(!dr_rules_can_build(&g, DR_BLD_TRADE_POST));   // 缺 20 毛
-    g.res[DR_RES_FUR] = 19;
-    assert(!dr_rules_can_build(&g, DR_BLD_TRADE_POST));
-    g.res[DR_RES_FUR] = 20;
-    assert(dr_rules_can_build(&g, DR_BLD_TRADE_POST));
-}
-
-static void test_trap_settlement(void) {
-    dr_game_t g;
-    dr_game_init(&g, 7, 1000);
-    g.res[DR_RES_WOOD] = 500;   // 先备料再建造(建造是即时扣费的)
-    assert(dr_rules_build(&g, DR_BLD_CART, 1000));
-    assert(dr_rules_build(&g, DR_BLD_TRAP, 1000));
-    assert(g.building_lv[DR_BLD_TRAP] == 1);
+    g.population = 3;
+    g.builder_lv = DR_BUILDER_HELP;
+    g.building_lv[DR_BLD_LODGE] = 1;
+    assert(dr_rules_job_assign(&g, DR_JOB_HUNTER, 2));   // 闲 1 采集者
+    g.res[DR_RES_WOOD] = 100;
 
     dr_rules_rt_t rt;
     dr_rules_rt_init(&rt, &g, 0);
-    dr_trap_yield_t y;
+    dr_rules_event_t ev; uint16_t arg;
+    for (uint32_t k = 1; k <= 20; k++)
+        (void)dr_rules_tick(&rt, &g, k * 10u * 1000u, &ev, &arg);
 
-    // 冷却未到:不可收获
-    assert(!dr_rules_trap_ready(&rt, &g, 10 * 1000));
-    assert(!dr_rules_trap_check(&rt, &g, 10 * 1000, &y));
-    // 到点:可收获;手动结算 2000s = 66 次,原版语义每次必得 1 件(无落空)
-    uint32_t got_cnt = 0;
-    for (uint32_t t = DR_TRAP_PERIOD_S * 1000u;
-         t <= 2000u * 1000u; t += DR_TRAP_PERIOD_S * 1000u) {
-        assert(dr_rules_trap_ready(&rt, &g, t));
-        assert(dr_rules_trap_check(&rt, &g, t, &y));
-        assert(y.fur + y.meat == 1 && y.bait == 0);   // Lv1 无饵:恰好 1 件
-        got_cnt += y.fur + y.meat;
-    }
-    assert(got_cnt == 66);                           // 总件数 = 结算次数
-    uint32_t fur = g.res[DR_RES_FUR];
-    uint32_t meat = g.res[DR_RES_MEAT];
-    assert(fur + meat == 66);
-    // 每件 50% 毛皮:期望 33,二项分布 ±3σ ≈ ±12
-    assert(fur >= 21 && fur <= 45);
-    // 陷阱不再掉诱饵(诱饵改为贸易购入、查看时消耗,对齐原版)
-    assert(g.res[DR_RES_BAIT] == 0);
-    assert(g.rng_seed_state == rt.rng.s);  // 种子已回写档
-    // 重复同样流程应得到完全相同的结果(确定性)
+    // 木:100 + 采集者 20×1 + 建造者 20×2 = 160
+    assert(g.res[DR_RES_WOOD] == 160 && g.res_total[DR_RES_WOOD] == 15 + 60);
+    // 猎人隔 tick 半率:20 tick 命中 10 次 × 2 人 = +20 毛 +20 肉
+    assert(g.res[DR_RES_FUR] == 20 && g.res[DR_RES_MEAT] == 20);
+    assert(g.res_total[DR_RES_FUR] == 20 && g.res_total[DR_RES_MEAT] == 20);
+}
+
+static void test_income_conversions(void) {
+    // 捕兽人:1 肉 → 1 饵,肉尽空转
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    g.population = 1;
+    g.building_lv[DR_BLD_LODGE] = 1;
+    assert(dr_rules_job_assign(&g, DR_JOB_TRAPPER, 1));
+    g.res[DR_RES_MEAT] = 5;
+    dr_rules_rt_t rt;
+    dr_rules_rt_init(&rt, &g, 0);
+    dr_rules_event_t ev; uint16_t arg;
+    for (uint32_t k = 1; k <= 8; k++)
+        (void)dr_rules_tick(&rt, &g, k * 10u * 1000u, &ev, &arg);
+    assert(g.res[DR_RES_BAIT] == 5 && g.res_total[DR_RES_BAIT] == 5);
+    assert(g.res[DR_RES_MEAT] == 0);
+
+    // 制革匠:5 毛 → 1 革,毛不足空转
     dr_game_t g2;
-    dr_game_init(&g2, 7, 1000);
-    g2.res[DR_RES_WOOD] = 500;
-    assert(dr_rules_build(&g2, DR_BLD_CART, 1000));
-    assert(dr_rules_build(&g2, DR_BLD_TRAP, 1000));
+    dr_game_init(&g2, 1, 1000);
+    g2.population = 1;
+    g2.building_lv[DR_BLD_TANNERY] = 1;
+    assert(dr_rules_job_assign(&g2, DR_JOB_TANNER, 1));
+    g2.res[DR_RES_FUR] = 12;
     dr_rules_rt_t rt2;
     dr_rules_rt_init(&rt2, &g2, 0);
-    for (uint32_t t = DR_TRAP_PERIOD_S * 1000u;
-         t <= 2000u * 1000u; t += DR_TRAP_PERIOD_S * 1000u) {
-        dr_rules_trap_check(&rt2, &g2, t, &y);
-    }
-    assert(memcmp(&g, &g2, sizeof(g)) == 0);
+    for (uint32_t k = 1; k <= 5; k++)
+        (void)dr_rules_tick(&rt2, &g2, k * 10u * 1000u, &ev, &arg);
+    assert(g2.res[DR_RES_FUR] == 2);
+    assert(g2.res[DR_RES_LEATHER] == 2 && g2.res_total[DR_RES_LEATHER] == 2);
+
+    // 熏肉匠:5 肉 + 5 木 → 1 干肉,任一不足空转
+    dr_game_t g3;
+    dr_game_init(&g3, 1, 1000);
+    g3.population = 1;
+    g3.building_lv[DR_BLD_SMOKEHOUSE] = 1;
+    assert(dr_rules_job_assign(&g3, DR_JOB_CHARCUTIER, 1));
+    g3.res[DR_RES_MEAT] = 20;
+    g3.res[DR_RES_WOOD] = 20;
+    dr_rules_rt_t rt3;
+    dr_rules_rt_init(&rt3, &g3, 0);
+    for (uint32_t k = 1; k <= 6; k++)
+        (void)dr_rules_tick(&rt3, &g3, k * 10u * 1000u, &ev, &arg);
+    assert(g3.res[DR_RES_MEAT] == 0 && g3.res[DR_RES_WOOD] == 0);
+    assert(g3.res[DR_RES_FOOD] == 4 && g3.res_total[DR_RES_FOOD] == 4);
 }
 
-static void test_trap_bait(void) {
-    dr_game_t g;
-    dr_game_init(&g, 11, 1000);
-    g.res[DR_RES_WOOD] = 500;
-    assert(dr_rules_build(&g, DR_BLD_CART, 1000));
-    assert(dr_rules_build(&g, DR_BLD_TRAP, 1000));
-    dr_rules_rt_t rt;
-    dr_rules_rt_init(&rt, &g, 0);
-    dr_trap_yield_t y;
-
-    // 开关默认关:有饵也不消耗
-    g.res[DR_RES_BAIT] = 7;
-    for (uint32_t t = DR_TRAP_PERIOD_S * 1000u;
-         t <= 30u * DR_TRAP_PERIOD_S * 1000u; t += DR_TRAP_PERIOD_S * 1000u) {
-        assert(dr_rules_trap_check(&rt, &g, t, &y));
-        assert(y.bait == 0 && y.fur + y.meat == 1);
-    }
-    assert(g.res[DR_RES_BAIT] == 7);
-
-    // 开关开:Lv1 每次耗 1 饵多掷 1 件(必得 2 件),饵尽自动回落单掷
-    g.trap_bait_on = 1;
-    for (int k = 0; k < 10; k++) {
-        uint32_t t = (31u + k) * DR_TRAP_PERIOD_S * 1000u;
-        assert(dr_rules_trap_check(&rt, &g, t, &y));
-        assert(y.bait == (k < 7 ? 1 : 0));           // 前 7 次有饵,后 3 次无
-        assert(y.fur + y.meat == 1 + y.bait);
-    }
-    assert(g.res[DR_RES_BAIT] == 0);       // 7 饵耗完
-    uint32_t t = 41u * DR_TRAP_PERIOD_S * 1000u;
-    assert(dr_rules_trap_check(&rt, &g, t, &y));
-    assert(y.bait == 0);                   // 无饵可用:不耗
-    assert(g.res[DR_RES_BAIT] == 0);
-
-    // 同种子同设置:耗饵路径也是确定性的
-    dr_game_t a, b;
-    dr_game_init(&a, 11, 1000);
-    dr_game_init(&b, 11, 1000);
-    for (dr_game_t *pg = &a; ; pg = &b) {
-        pg->res[DR_RES_WOOD] = 500;
-        assert(dr_rules_build(pg, DR_BLD_CART, 1000));
-        assert(dr_rules_build(pg, DR_BLD_TRAP, 1000));
-        pg->res[DR_RES_BAIT] = 3;
-        pg->trap_bait_on = 1;
-        dr_rules_rt_t r;
-        dr_rules_rt_init(&r, pg, 0);
-        for (uint32_t k = 1; k <= 20; k++)
-            dr_rules_trap_check(&r, pg, k * DR_TRAP_PERIOD_S * 1000u, &y);
-        if (pg == &b) break;
-    }
-    assert(memcmp(&a, &b, sizeof(a)) == 0);
-}
-
-static void test_trade_sell(void) {
+// ---- 流浪者:0.5~3 分钟成批到达;满员不来;建房不加人口 ----
+static void test_wanderers(void) {
     dr_game_t g;
     dr_game_init(&g, 1, 1000);
-    g.res[DR_RES_FUR] = 10;
-    g.res[DR_RES_MEAT] = 4;
-    uint32_t wood0 = g.res[DR_RES_WOOD];
-    assert(dr_rules_trade_sell_value(&g) == 10u * 5u + 4u * 3u);
-    assert(dr_rules_trade_sell_all(&g) == 62u);
-    assert(g.res[DR_RES_FUR] == 0 && g.res[DR_RES_MEAT] == 0);
-    assert(g.res[DR_RES_WOOD] == wood0 + 62u);
-    assert(dr_rules_trade_sell_all(&g) == 0u);   // 空手再卖 = 0,不动账
-
-    // 整数组:材料不够失败;足够则按牌价成交
-    assert(!dr_rules_trade_fur10(&g));
-    g.res[DR_RES_FUR] = 12;
-    wood0 = g.res[DR_RES_WOOD];
-    assert(dr_rules_trade_fur10(&g));
-    assert(g.res[DR_RES_FUR] == 2 && g.res[DR_RES_WOOD] == wood0 + 50u);
-    assert(!dr_rules_trade_meat10(&g));
-    g.res[DR_RES_MEAT] = 10;
-    wood0 = g.res[DR_RES_WOOD];
-    assert(dr_rules_trade_meat10(&g));
-    assert(g.res[DR_RES_MEAT] == 0 && g.res[DR_RES_WOOD] == wood0 + 30u);
-    g.res[DR_RES_WOOD] = 14;                     // 木头不够(14 < 15)
-    assert(!dr_rules_trade_bait5(&g));
-    g.res[DR_RES_WOOD] += 100;
-    assert(dr_rules_trade_bait5(&g));
-    assert(g.res[DR_RES_BAIT] == 5);
-
-    // 皮甲:50木+10革,限一件
-    g.res[DR_RES_WOOD] = DR_TRADE_ARMOR_WOOD - 1;
-    g.res[DR_RES_LEATHER] = DR_TRADE_ARMOR_LEATHER;
-    assert(!dr_rules_trade_armor(&g));           // 木不够
-    g.res[DR_RES_WOOD] = DR_TRADE_ARMOR_WOOD;
-    assert(dr_rules_trade_armor(&g));
-    assert(g.armor_lv == 1);
-    assert(g.res[DR_RES_WOOD] == 0 && g.res[DR_RES_LEATHER] == 0);
-    g.res[DR_RES_WOOD] = 1000;
-    g.res[DR_RES_LEATHER] = 1000;
-    assert(!dr_rules_trade_armor(&g));           // 已穿着,不可再买
-}
-
-static void test_offline_settle(void) {
-    dr_game_t g;
-    dr_game_init(&g, 1, 1000);
-    g.saved_at_ts = 100000;
-    g.fire_lv = DR_FIRE_ROARING;
-    g.building_lv[DR_BLD_TRAP] = 1;              // 每周期必得 1 件
+    g.building_lv[DR_BLD_HUT] = 1;    // 上限 4(原版每屋 4 人)
+    assert(dr_rules_pop_cap(&g) == 4);
     dr_rules_rt_t rt;
     dr_rules_rt_init(&rt, &g, 0);
+    dr_rules_event_t ev; uint16_t arg;
 
-    // 时钟回拨:不结算,且锚点拉平到当下(防止回拨期反复判负)
-    assert(dr_rules_offline_settle(&rt, &g, 99999, 0, 0) == 0);
-    assert(g.saved_at_ts == 99999);
-
-    // 离线 600s:60 经济 tick;火熄;陷阱 20 个周期 × Lv1 必得 = 恰好 20 件
-    dr_offline_yield_t y;
-    uint32_t wood0 = g.res[DR_RES_WOOD];
-    uint32_t ticks = dr_rules_offline_settle(&rt, &g, 100600, 0, &y);
-    assert(ticks == 60 && y.ticks == 60);
-    assert(g.fire_lv == DR_FIRE_DEAD && y.fire_out);
-    assert(g.saved_at_ts == 100600);
-    assert(g.res[DR_RES_WOOD] >= wood0);         // 人口 0 无产出,至少不减
-    assert(y.fur + y.meat == 20);                // 20 周期 × 1 件(火熄不减半)
-    assert(y.food_eaten == 0);                   // 没人:不吃
-    assert(!y.starving);
-    assert(g.res[DR_RES_FUR] + g.res[DR_RES_MEAT] == y.fur + y.meat);
-    assert(g.res[DR_RES_BAIT] == 0);             // 离线陷阱不掉饵
-
-    // 村庄产出补算:闲人+伐木,口粮同步补扣
-    dr_game_init(&g, 2, 1000);
-    g.saved_at_ts = 100000;
-    g.population = 2;
-    g.res[DR_RES_FOOD] = 1000;
-    assert(dr_rules_job_assign(&g, DR_JOB_LUMBER, 2));
-    dr_rules_rt_init(&rt, &g, 0);
-    wood0 = g.res[DR_RES_WOOD];
-    ticks = dr_rules_offline_settle(&rt, &g, 100600, 0, &y);
-    assert(ticks == 60);
-    assert(g.res[DR_RES_WOOD] == wood0 + 2u * 2u * 60u);  // 伐木2 × 2木 × 60tick
-    assert(y.food_eaten == 2u * 60u);                     // 2 人 × 60tick
-    assert(g.res[DR_RES_FOOD] == 1000 - 2u * 60u);
-    assert(!y.starving);
-
-    // 断粮离线:全岗罢工,无产出,回报 starving
-    dr_game_init(&g, 3, 1000);
-    g.saved_at_ts = 100000;
-    g.population = 2;
-    assert(dr_rules_job_assign(&g, DR_JOB_LUMBER, 2));    // 无闲人
-    dr_rules_rt_init(&rt, &g, 0);
-    wood0 = g.res[DR_RES_WOOD];
-    ticks = dr_rules_offline_settle(&rt, &g, 100600, 0, &y);
-    assert(ticks == 60);
-    assert(g.res[DR_RES_WOOD] == wood0);         // 罢工:无产出
-    assert(y.starving);
-    assert(dr_rules_starving(&g));
-}
-
-static void test_wanderer(void) {
-    dr_game_t g;
-    dr_game_init(&g, 1, 1000);
-    g.building_lv[DR_BLD_HUT] = 1;               // 容量 2
-    g.fire_lv = DR_FIRE_BURNING;
-    g.population = 1;                            // 已有人定居才会来流浪者
-    g.res[DR_RES_FOOD] = 10;                     // 村里不断粮
-    dr_rules_rt_t rt;
-    dr_rules_rt_init(&rt, &g, 0);
-
-    // 30s 内不到达;到点且条件满足 +1(上限 180s,步进 1s 轮询)
-    assert(!dr_rules_wanderer_tick(&rt, &g, 10u * 1000u));
-    uint32_t t = 31u * 1000u;
     bool arrived = false;
-    for (int i = 0; i < 200 && !arrived; i++, t += 1000u)
-        arrived = dr_rules_wanderer_tick(&rt, &g, t);
-    assert(arrived && g.population == 2);
+    for (uint32_t t = 1000; t <= 200u * 1000u && !arrived; t += 1000u) {
+        (void)dr_rules_tick(&rt, &g, t, &ev, &arg);
+        if (ev == DR_RT_EV_WANDERER) {
+            arrived = true;
+            assert(arg >= 1 && arg <= 4 && g.population == arg);
+        }
+    }
+    assert(arrived);
 
-    // 满员不再来(200s 轮询内人口不变)
-    g.population = 2;
-    t += 1000u;
-    for (int i = 0; i < 200; i++, t += 1000u)
-        (void)dr_rules_wanderer_tick(&rt, &g, t);
-    assert(g.population == 2);                   // 满员钳制
+    // 填满后不再来
+    g.population = 4;
+    for (uint32_t t = 200u * 1000u; t <= 500u * 1000u; t += 1000u) {
+        (void)dr_rules_tick(&rt, &g, t, &ev, &arg);
+        assert(g.population == 4);
+    }
+}
 
-    // 火熄不来
-    g.population = 1;
-    g.fire_lv = DR_FIRE_DEAD;
-    t += 1000u;
-    for (int i = 0; i < 200; i++, t += 1000u)
-        (void)dr_rules_wanderer_tick(&rt, &g, t);
-    assert(g.population == 1);
+// ---- 贸易(原版 TradeGoods:只买不卖,毛/鳞/牙支付) ----
+static void test_trade(void) {
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    g.res[DR_RES_FUR] = 1000;
+    assert(!dr_rules_trade_buy(&g, DR_TRADE_SCALES));    // 未建贸易站
+    g.building_lv[DR_BLD_TRADE_POST] = 1;
 
-    // 断粮不来(荒年不收人)
-    g.fire_lv = DR_FIRE_BURNING;
-    g.res[DR_RES_FOOD] = 0;
-    g.res[DR_RES_MEAT] = 0;
-    t += 1000u;
-    for (int i = 0; i < 200; i++, t += 1000u)
-        (void)dr_rules_wanderer_tick(&rt, &g, t);
-    assert(g.population == 1);
+    g.res[DR_RES_FUR] = 149;
+    assert(!dr_rules_trade_buy(&g, DR_TRADE_SCALES));    // 毛 150 不够
+    g.res[DR_RES_FUR] = 150;
+    assert(dr_rules_trade_buy(&g, DR_TRADE_SCALES));     // 150 毛 → 1 鳞
+    assert(g.res[DR_RES_FUR] == 0 && g.res[DR_RES_SCALES] == 1);
+
+    g.res[DR_RES_FUR] = 1000; g.res[DR_RES_SCALES] = 50; g.res[DR_RES_TEETH] = 50;
+    assert(dr_rules_trade_buy(&g, DR_TRADE_STEEL));      // 300毛+50鳞+50牙 → 1 钢
+    assert(g.res[DR_RES_STEEL] == 1 && g.res[DR_RES_TEETH] == 0);
+    assert(!dr_rules_trade_buy(&g, DR_TRADE_COAL));      // 牙不够
+
+    g.res[DR_RES_SCALES] = 10;
+    assert(dr_rules_trade_buy(&g, DR_TRADE_BULLETS));    // 10 鳞 → 1 子弹
+    assert(g.res[DR_RES_BULLETS] == 1 && g.res[DR_RES_SCALES] == 0);
+
+    // 罗盘:限一件,标记入档
+    g.res[DR_RES_FUR] = 400; g.res[DR_RES_SCALES] = 20; g.res[DR_RES_TEETH] = 10;
+    assert(dr_rules_trade_buy(&g, DR_TRADE_COMPASS));
+    assert((g.flags & ((uint64_t)1u << DR_FLAG_COMPASS)) != 0);
+    g.res[DR_RES_FUR] = 400; g.res[DR_RES_SCALES] = 20; g.res[DR_RES_TEETH] = 10;
+    assert(!dr_rules_trade_buy(&g, DR_TRADE_COMPASS));   // 已购
+}
+
+// ---- 离线补算(设备适配):熄火 + 收入逐 tick + 陷阱按周期 ----
+static void test_offline(void) {
+    dr_game_t g;
+    dr_game_init(&g, 1, 100000);
+    g.population = 1;                       // 1 采集者
+    g.builder_lv = DR_BUILDER_HELP;
+    g.building_lv[DR_BLD_TRAP] = 1;
+    g.fire_lv = DR_FIRE_ROARING;
+    g.saved_at_ts = 100000;
+    dr_rules_rt_t rt;
+    dr_rules_rt_init(&rt, &g, 0);
+
+    dr_offline_yield_t y;
+    uint32_t ticks = dr_rules_offline_settle(&rt, &g, 101800, 0, &y);
+    assert(ticks == 180 && y.ticks == 180);      // 1800s → 180 tick
+    assert(y.fire_out && g.fire_lv == DR_FIRE_DEAD);
+    assert(y.wood == 180 * 3);                    // 采集者 1×180 + 建造者 2×180
+    // 陷阱:1800s / 90s = 20 周期 × 1 陷阱 = 20 件,无饵
+    assert(g.res[DR_RES_FUR] + g.res[DR_RES_MEAT] + g.res[DR_RES_SCALES] +
+           g.res[DR_RES_TEETH] + g.res[DR_RES_CLOTH] + g.res[DR_RES_CHARM] == 20);
+    assert(g.saved_at_ts == 101800);
+    assert(g.rng_seed_state == rt.rng.s);         // 离线序列写回
 }
 
 int main(void) {
-    test_fire_cycle();
-    test_build_chain();
-    test_trap_settlement();
-    test_trap_bait();
+    test_building_costs();
+    test_build_gates();
+    test_fire();
+    test_temperature();
+    test_builder_arc();
+    test_gather();
+    test_trap();
     test_jobs();
-    test_food_economy();
-    test_tanner();
-    test_trade_sell();
-    test_offline_settle();
-    test_wanderer();
+    test_income_production();
+    test_income_conversions();
+    test_wanderers();
+    test_trade();
+    test_offline();
     printf("test_dr_rules: all passed\n");
     return 0;
 }

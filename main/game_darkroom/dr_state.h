@@ -62,8 +62,12 @@ typedef struct {
 
     // 装备与偏好(v2 尾插;迁移见 dr_state_pack_v1/dr_state_load)。
     uint8_t  armor_lv;                  // 护甲:0=无,1=皮甲(战斗减免 M4 接入)
-    uint8_t  trap_bait_on;              // 陷阱诱饵开关:查看陷阱时耗 1 饵多掷一次
+    uint8_t  trap_bait_on;              // 弃用(v3:饵随查看自动消耗,原版无开关)
     uint8_t  _rsv[2];                   // 对齐预留,恒 0
+
+    // v3 尾插(对齐原版 room.js 的温度与建造者剧情)。
+    uint8_t  temp_lv;                   // 室温 0..4(冻结/冷/微温/暖/热),向火焰档靠拢
+    uint8_t  builder_lv;                // 建造者(陌生人)0=无 1=晕倒 2=发抖 3=沉睡 4=帮忙
 } dr_game_t;
 
 #pragma pack(push, 1)
@@ -90,9 +94,9 @@ bool dr_state_unpack(const dr_save_image_t *img, dr_game_t *out,
 // dr_game_t。返回 false = 损坏/未知版本。升级固件不丢档靠这条路径。
 bool dr_state_load(const void *blob, size_t len, dr_game_t *out);
 
-// 主机测试用:把 g 中 v1 拥有的字段压成一张 v1 布局镜像(验证迁移)。
-// 返回写入字节数;缓冲不足返回 0。
+// 主机测试用:把 g 压成历史布局镜像(验证迁移链)。返回写入字节数;缓冲不足返回 0。
 size_t dr_state_pack_v1(const dr_game_t *g, void *out, size_t outsz);
+size_t dr_state_pack_v2(const dr_game_t *g, void *out, size_t outsz);
 
 // 离线结算(M2 起接产出表;M1 提供时间钳制口径):
 //   delta_s = now_ts - g->saved_at_ts

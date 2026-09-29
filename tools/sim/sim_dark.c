@@ -111,6 +111,24 @@ int dr_port_load(dr_game_t *g, bool *out_loaded) {
     if (dr_state_unpack(&s_save_img, g, &ver)) *out_loaded = true;
     return 0;
 }
+int dr_port_log_save(const void *blob, size_t len) {
+    if (!s_save_persist) return 0;
+    FILE *f = fopen("sim_dr_log.bin", "wb");
+    if (!f) return -1;
+    fwrite(blob, 1, len, f);
+    fclose(f);
+    return 0;
+}
+int dr_port_log_load(void *buf, size_t cap, size_t *out_len) {
+    *out_len = 0;
+    if (!s_save_persist) return 0;
+    FILE *f = fopen("sim_dr_log.bin", "rb");
+    if (!f) return 0;
+    size_t n = fread(buf, 1, cap, f);
+    fclose(f);
+    if (n > 0) *out_len = n;
+    return 0;
+}
 
 // ---------------------------------------------------------------------------
 // LVGL 全局锁:按键线程与主循环互斥(真机由 esp_lvgl_port 提供)
