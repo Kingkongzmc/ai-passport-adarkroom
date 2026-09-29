@@ -31,7 +31,13 @@ typedef struct {
     uint8_t  in_wilderness;
     uint8_t  water, food;
 } dr_game_v1_t;
+#pragma pack(pop)
 
+// v2(a8ba39a 时代固件,未发布):res 14 槽(+皮革),尾部 armor_lv/trap_bait_on/_rsv;
+//            职业枚举 LUMBER=0,HUNTER=1,TANNER=2,SMITH=3。
+//            注意:v2 固件的 dr_game_t 是自然对齐(未打包),实际落盘 480 字节
+//            (flags 前有 2 字节对齐垫层,尾部补齐)——冻结副本必须同构,
+//            按 472 打包会因长度不符把真机 v2 档误判坏档。
 typedef struct {
     uint32_t saved_at_ts;
     uint32_t res[14];
@@ -52,10 +58,9 @@ typedef struct {
     uint8_t  trap_bait_on;
     uint8_t  _rsv[2];
 } dr_game_v2_t;
-#pragma pack(pop)
 
 _Static_assert(sizeof(dr_game_v1_t) == 460u, "v1 body size must stay frozen");
-_Static_assert(sizeof(dr_game_v2_t) == 472u, "v2 body size must stay frozen");
+_Static_assert(sizeof(dr_game_v2_t) == 480u, "v2 body size must stay frozen(自然对齐)");
 _Static_assert(sizeof(dr_save_image_t) == sizeof(dr_save_hdr_t) + sizeof(dr_game_t),
                "save image must be header + body with no padding");
 

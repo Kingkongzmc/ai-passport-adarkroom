@@ -173,7 +173,7 @@ static void test_v1_migration(void) {
     g2.building_lv[2] = 1;
     g2.fire_lv = DR_FIRE_BURNING;
     size_t n2 = dr_state_pack_v2(&g2, blob, sizeof(blob));
-    assert(n2 == sizeof(dr_save_hdr_t) + 472u);
+    assert(n2 == sizeof(dr_save_hdr_t) + 480u);   // v2 实际为自然对齐 480
     dr_game_t out2;
     assert(dr_state_load(blob, n2, &out2));
     assert(out2.res[DR_RES_LEATHER] == 7);
