@@ -87,6 +87,8 @@ static struct {
     int8_t nav_focus;          // 主页导航焦点(-1=动作区,0..3=tab)
     int8_t village_adj;        // 村庄调节模式:在调的职业(-1=未调节)
     uint8_t job_scroll;        // 村庄职业区滚动偏移(窗口 5 行)
+    uint8_t craft_scroll;      // 制造页滚动偏移(窗口 8 行,14 项装不下)
+    uint8_t craft_total;       // 制造页当前可见制造项总数
     uint8_t craft_row_map[16]; // 制造页:行号 → 制造项
     uint8_t craft_row_count;   // 制造页:可见制造行数(不含返回)
     bool prev_gather_ready;    // 上一拍冷却秒数(变化即重绘:冷却条/倒计时逐拍走)
@@ -111,6 +113,7 @@ static lv_obj_t *s_tabs[4], *s_tablbl[4];
 static lv_obj_t *s_cells[8];
 static lv_obj_t *s_loglines[LOG_VIS];
 static lv_obj_t *s_hint;
+static lv_obj_t *s_strack, *s_sthumb;   // 滚动指示条:右缘轨道+滑块(村庄/制造窗)
 // 动作行:容器 + 冷却填充 + 箭头 + 文字(主页/战斗/弹窗选项共用骨架)
 typedef struct {
     lv_obj_t *row, *fill, *arrow, *lbl;
@@ -350,6 +353,20 @@ static void build_ui(void) {
     // 页面底部说明行
     s_hint = label_new(s_content, &dr_font_12, lv_color_hex(COL_DIM), 0, 256, 198, 15);
 
+    // 滚动指示条(轨道暗/滑块亮):位置与长度由村庄/制造页渲染时全量重写
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t **p = i ? &s_sthumb : &s_strack;
+        *p = lv_obj_create(s_content);
+        lv_obj_set_pos(*p, 195, 0);
+        lv_obj_set_size(*p, 2, 8);
+        lv_obj_set_style_radius(*p, 1, 0);
+        lv_obj_set_style_bg_color(*p,
+            lv_color_hex(i ? COL_DIM : COL_CD), 0);
+        lv_obj_set_style_border_width(*p, 0, 0);
+        lv_obj_set_style_pad_all(*p, 0, 0);
+        lv_obj_clear_flag(*p, LV_OBJ_FLAG_SCROLLABLE);
+    }
+
     // 动作行 4 行 @ y=184/208/232/256
     for (int i = 0; i < ACT_ROWS; i++) {
         actrow_t *a = &s_acts[i];
@@ -387,9 +404,11 @@ static void build_ui(void) {
         lv_obj_clear_flag(r->row, LV_OBJ_FLAG_SCROLLABLE);
         r->mark = label_new(r->row, &dr_font_12, lv_color_hex(COL_GOLD),
                             4, 1, ARROW_W12, 20);
+        // t 列 58px(最长实文"械库 Lv10"≈50px);v 列 120px 右对齐
+        // ("1500木100铁100煤"=103px,90px 时代必截断,I4)
         r->t = label_new(r->row, &dr_font_12, lv_color_hex(COL_TEXT),
-                         4 + ARROW_W12, 1, 140, 20);
-        r->v = label_new(r->row, &dr_font_12, lv_color_hex(COL_DIM), 102, 1, 90, 20);
+                         4 + ARROW_W12, 1, 58, 20);
+        r->v = label_new(r->row, &dr_font_12, lv_color_hex(COL_DIM), 72, 1, 120, 20);
         lv_obj_set_style_text_align(r->v, LV_TEXT_ALIGN_RIGHT, 0);
     }
 
@@ -441,15 +460,15 @@ static void build_ui(void) {
                            2 + ARROW_W16, 1, 160 - ARROW_W16 - 4, 20);
     }
 
-    // 标题页三件套(独立对象)
-    s_t_big = label_new(s_content, &dr_font_24, lv_color_hex(COL_GOLD), 0, 100, 200, 30);
+    // 标题页三件套(独立对象;组块中心 ~139 垂直居中)
+    s_t_big = label_new(s_content, &dr_font_24, lv_color_hex(COL_GOLD), 0, 88, 200, 30);
     lv_obj_set_style_text_align(s_t_big, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(s_t_big, "小黑屋");
-    s_t_sub = label_new(s_content, &dr_font_12, lv_color_hex(COL_DIM), 0, 136, 200, 15);
+    s_t_sub = label_new(s_content, &dr_font_12, lv_color_hex(COL_DIM), 0, 124, 200, 15);
     lv_obj_set_style_text_align(s_t_sub, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(s_t_sub, "屋里冷得刺骨");
     s_t_ok = lv_obj_create(s_content);
-    lv_obj_set_pos(s_t_ok, 40, 180);
+    lv_obj_set_pos(s_t_ok, 40, 168);
     lv_obj_set_size(s_t_ok, 120, ROW_H);
     lv_obj_set_style_radius(s_t_ok, 3, 0);
     lv_obj_set_style_bg_opa(s_t_ok, LV_OPA_TRANSP, 0);
@@ -554,19 +573,26 @@ static void cell_base(int i, int x, int y) {
     lv_obj_set_style_text_font(s_cells[i], &dr_font_12, 0);
 }
 
+// 资源格文字:"木 12.3k"——数量经紧凑化(46px 格 5 位数起必截断,I1)
+static void cell_res(int i, const char *label, uint32_t v) {
+    char num[8];
+    dr_fmt_compact(num, sizeof(num), v);
+    lv_label_set_text_fmt(s_cells[i], "%s %s", label, num);
+}
+
 static void render_cells(void) {
     for (int i = 0; i < 8; i++) {
         cell_base(i, (i % 4) * 49, 48 + (i / 4) * 15);
         lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
     }
     lv_label_set_text_fmt(s_cells[0], "火%s", fire_char());
-    lv_label_set_text_fmt(s_cells[1], "人 %u", s.game.population);
-    lv_label_set_text_fmt(s_cells[2], "阱 %u", s.game.building_lv[DR_BLD_TRAP]);
-    lv_label_set_text_fmt(s_cells[3], "木 %lu", (unsigned long)s.game.res[DR_RES_WOOD]);
-    lv_label_set_text_fmt(s_cells[4], "毛 %lu", (unsigned long)s.game.res[DR_RES_FUR]);
-    lv_label_set_text_fmt(s_cells[5], "肉 %lu", (unsigned long)s.game.res[DR_RES_MEAT]);
-    lv_label_set_text_fmt(s_cells[6], "诱 %lu", (unsigned long)s.game.res[DR_RES_BAIT]);
-    lv_label_set_text_fmt(s_cells[7], "革 %lu", (unsigned long)s.game.res[DR_RES_LEATHER]);
+    cell_res(1, "人", s.game.population);
+    cell_res(2, "阱", s.game.building_lv[DR_BLD_TRAP]);
+    cell_res(3, "木", s.game.res[DR_RES_WOOD]);
+    cell_res(4, "毛", s.game.res[DR_RES_FUR]);
+    cell_res(5, "肉", s.game.res[DR_RES_MEAT]);
+    cell_res(6, "诱", s.game.res[DR_RES_BAIT]);
+    cell_res(7, "革", s.game.res[DR_RES_LEATHER]);
 }
 
 // 主页日志:逐行标签,最新在上,旧条目颜色渐隐到背景(web 版 fade)。
@@ -591,12 +617,13 @@ static const char *log_entry_newest_first(int k) {
     return (idx >= 0) ? s_logs[idx] : NULL;
 }
 
-// 主页日志渲染:n_acts = 本页动作行数(3 或 4)
-static void render_home_log(int n_acts) {
-    const int pitch = 15;                     // 设计网格行距(90px 恰好 6 行)
-    int avail = 184 - 90;
-    int max_lines = avail / pitch;
-    int show = (n_acts >= 4) ? max_lines - 1 : max_lines;
+// 主页日志渲染:n_acts = 本页动作行数,act_top = 首行动作行 y(动作行底部对齐,
+// 行数少时日志区自动加高,上限 LOG_VIS)
+static void render_home_log(int n_acts, int act_top) {
+    (void)n_acts;
+    const int pitch = 15;
+    int max_lines = (act_top - 90) / pitch;
+    int show = max_lines;
     if (show > LOG_VIS) show = LOG_VIS;
     for (int i = 0; i < LOG_VIS; i++) {
         lv_obj_t *l = s_loglines[i];
@@ -657,6 +684,8 @@ static void clear_scene(void) {
     for (int i = 0; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
     for (int i = 0; i < LOG_VIS; i++) lv_obj_add_flag(s_loglines[i], LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_strack, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_sthumb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_t_big, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_t_sub, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_t_ok, LV_OBJ_FLAG_HIDDEN);
@@ -695,14 +724,16 @@ static void render_home(uint32_t now_ms) {
     lv_obj_add_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
 
     int n = home_lines();
-    render_home_log(n);   // 行数随动作行数自适应(3 行动作=更多日志行)
+    // 动作行底部对齐(尾行止于 278):早期 2 行时不再在页底留 48px 空白,
+    // 日志区随之加高(render_home_log 按首行 y 自适应行数)
+    int gy = 278 - n * 24;
+    render_home_log(n, gy);
     for (int i = 0; i < n; i++) {
         lv_obj_set_size(s_acts[i].row, ROW_W, ROW_H);
         lv_obj_set_width(s_acts[i].lbl, 170);
         lv_obj_set_style_text_align(s_acts[i].lbl, LV_TEXT_ALIGN_LEFT, 0);
     }
     int idx = 0;
-    int gy = 184;
     bool act_focus = (s.nav_focus < 0);   // 光标在页签上时动作区整体去焦点
     bool no_wood = s.game.res[DR_RES_WOOD] < DR_FIRE_LIGHT_COST;
     int sp = stoke_pct(now_ms);
@@ -752,10 +783,10 @@ static void render_build(void) {
         lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
     }
     for (int i = 4; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text_fmt(s_cells[0], "木 %lu", (unsigned long)s.game.res[DR_RES_WOOD]);
-    lv_label_set_text_fmt(s_cells[1], "毛 %lu", (unsigned long)s.game.res[DR_RES_FUR]);
-    lv_label_set_text_fmt(s_cells[2], "肉 %lu", (unsigned long)s.game.res[DR_RES_MEAT]);
-    lv_label_set_text_fmt(s_cells[3], "诱 %lu", (unsigned long)s.game.res[DR_RES_BAIT]);
+    cell_res(0, "木", s.game.res[DR_RES_WOOD]);
+    cell_res(1, "毛", s.game.res[DR_RES_FUR]);
+    cell_res(2, "肉", s.game.res[DR_RES_MEAT]);
+    cell_res(3, "诱", s.game.res[DR_RES_BAIT]);
     for (int i = 0; i < LOG_VIS; i++) lv_obj_add_flag(s_loglines[i], LV_OBJ_FLAG_HIDDEN);
     // 列表 8 建筑 + 返回,行距 23 从 52 起
     for (int i = 0; i < DR_BLD_KIND_COUNT; i++) {
@@ -797,10 +828,11 @@ static void render_build(void) {
             }
             if (n == 0) snprintf(v, sizeof(v), "%s", warm ? "未解锁" : "太冷");
         }
-        set_row(i, 38 + i * 20, t, v, s.focus == i,
+        // 行起点 46:资源带止于 43,留 3px 间隙(38 起会与资源格叠 5px)
+        set_row(i, 46 + i * 19, t, v, s.focus == i,
                 !(can && build_affordable((uint8_t)i) && warm));
     }
-    set_row(DR_BLD_KIND_COUNT, 38 + DR_BLD_KIND_COUNT * 20, "返回", "",
+    set_row(DR_BLD_KIND_COUNT, 46 + DR_BLD_KIND_COUNT * 19, "返回", "",
             s.focus == DR_BLD_KIND_COUNT, false);
     // 底部说明:光标所选建筑的作用
     static const char *bld_desc[] = {
@@ -816,7 +848,7 @@ static void render_build(void) {
         "解锁制造页(武器护甲)",    // 工坊
     };
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(s_hint, 0, 258);   // 圆屏内:距中心 98,半宽 ~69 可见
+    lv_obj_set_pos(s_hint, 0, 262);   // 返回行(236-258)之下;圆屏内可见
     if (s.game.temp_lv <= DR_TEMP_COLD) {
         if (s.game.fire_lv == DR_FIRE_DEAD)
             lv_label_set_text(s_hint, "屋里太冷,先点火再建造");
@@ -895,6 +927,14 @@ static void render_village(void) {
     }
     set_row(8, 236, adj ? "完成调节" : "返回", "", s.focus == 8, false);
 
+    // 滚动指示条:9 职业装不进 5 行窗,右缘轨道+滑块标示窗口位置(I22)
+    lv_obj_set_pos(s_strack, 195, 121);
+    lv_obj_set_size(s_strack, 2, 114);
+    lv_obj_clear_flag(s_strack, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(s_sthumb, 195, 121 + (int)s.job_scroll * 51 / 4);
+    lv_obj_set_size(s_sthumb, 2, 63);
+    lv_obj_clear_flag(s_sthumb, LV_OBJ_FLAG_HIDDEN);
+
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(s_hint, 0, 264);   // 返回行(236)之下,不再遮挡
     if (adj) {
@@ -906,18 +946,15 @@ static void render_village(void) {
         // 光标停在职业行:显示该职业的产出配方(同建造页提示模式)
         lv_label_set_text(s_hint, job_desc[village_row_job(s.focus)]);
     } else {
-        // 概览:人口/上限 + 陷阱副产物与干肉(资源格放不下的那几样)
-        char hbuf[96];
-        int n = snprintf(hbuf, sizeof(hbuf), "共%u人/上限%u",
-                         s.game.population, dr_rules_pop_cap(&s.game));
-        if (s.game.res[DR_RES_SCALES] || s.game.res[DR_RES_TEETH] ||
-            s.game.res[DR_RES_CLOTH] || s.game.res[DR_RES_FOOD]) {
-            n += snprintf(hbuf + n, sizeof(hbuf) - n, " 鳞%lu 牙%lu 布%lu 干%lu",
-                          (unsigned long)s.game.res[DR_RES_SCALES],
-                          (unsigned long)s.game.res[DR_RES_TEETH],
-                          (unsigned long)s.game.res[DR_RES_CLOTH],
-                          (unsigned long)s.game.res[DR_RES_FOOD]);
-        }
+        // 概览:陷阱副产物与干肉(资源格放不下的那几样;紧凑化后四项 179px 放得下。
+        // 人口/闲人不再放这里——采集者行已显示闲人数)
+        char c1[8], c2[8], c3[8], c4[8];
+        dr_fmt_compact(c1, sizeof(c1), s.game.res[DR_RES_SCALES]);
+        dr_fmt_compact(c2, sizeof(c2), s.game.res[DR_RES_TEETH]);
+        dr_fmt_compact(c3, sizeof(c3), s.game.res[DR_RES_CLOTH]);
+        dr_fmt_compact(c4, sizeof(c4), s.game.res[DR_RES_FOOD]);
+        char hbuf[64];
+        snprintf(hbuf, sizeof(hbuf), "鳞%s 牙%s 布%s 干%s", c1, c2, c3, c4);
         lv_label_set_text(s_hint, hbuf);
     }
 }
@@ -962,10 +999,20 @@ static const char *map_tile_name(uint8_t t) {
     }
 }
 
+static const char *weapon_name(uint8_t lv) {
+    static const char *n[5] = { "拳", "骨矛", "铁剑", "钢剑", "步枪" };
+    return (lv < 5) ? n[lv] : n[0];
+}
+
+static const char *armor_name(uint8_t lv) {
+    static const char *n[4] = { "无", "皮甲", "铁甲", "钢甲" };
+    return (lv < 4) ? n[lv] : n[3];
+}
+
 static void render_map(void) {
     render_topbar("荒野");
-    render_tabs(2, forest_open(), true, -1);
-
+    // 页签不进地图页(mockup ⑥"荒野地图(无页签)"):资源格才能落在 y24,
+    // 不再与页签 y24-44 叠压(I7);长按确定返回小屋
     if (!s.game.in_wilderness) {
         // 出发整备(原版 Path 承重制):干肉/药/子弹在重量预算内自选
         for (int i = 0; i < 4; i++) {
@@ -974,45 +1021,52 @@ static void render_map(void) {
         }
         for (int i = 4; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text_fmt(s_cells[0], "水 %u", dr_world_water_cap(&s.game));
-        lv_label_set_text_fmt(s_cells[1], "重 %u.%u/10",
+        lv_label_set_text_fmt(s_cells[1], "袋%u.%u",
                               dr_world_bag_weight(&s.game, &s_world) / 10u,
                               dr_world_bag_weight(&s.game, &s_world) % 10u);
-        lv_label_set_text_fmt(s_cells[2], "HP %u", dr_world_health_cap(&s.game));
-        lv_label_set_text_fmt(s_cells[3], "行 %u", 0);
+        lv_label_set_text_fmt(s_cells[2], "HP%u", dr_world_health_cap(&s.game));
+        lv_label_set_text_fmt(s_cells[3], "承%u",
+                              dr_world_bag_cap(&s.game) / 10u);
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
         char v[24];
+        char cbuf[8];   // 库存量紧凑化(可超 5 位)
         bool adj = (s.outfit_adj >= 0);
-        snprintf(v, sizeof(v), "库%lu 带%u", (unsigned long)s.game.res[DR_RES_FOOD],
-                 s.game.food);
-        set_row(0, 100, "干肉", v, s.focus == 0, false);
-        snprintf(v, sizeof(v), "库%lu 带%u",
-                 (unsigned long)s.game.res[DR_RES_MEDICINE],
-                 dr_world_carry_medicine(&s_world));
-        set_row(1, 124, "药", v, s.focus == 1,
+        dr_fmt_compact(cbuf, sizeof(cbuf), s.game.res[DR_RES_FOOD]);
+        snprintf(v, sizeof(v), "库%s 带%u", cbuf, s.game.food);
+        set_row(0, 52, "干肉", v, s.focus == 0, false);
+        dr_fmt_compact(cbuf, sizeof(cbuf), s.game.res[DR_RES_MEDICINE]);
+        snprintf(v, sizeof(v), "库%s 带%u",
+                 cbuf, dr_world_carry_medicine(&s_world));
+        set_row(1, 78, "药", v, s.focus == 1,
                 s.game.res[DR_RES_MEDICINE] == 0 &&
                     dr_world_carry_medicine(&s_world) == 0);
-        snprintf(v, sizeof(v), "库%lu 带%u",
-                 (unsigned long)s.game.res[DR_RES_BULLETS],
-                 dr_world_carry_bullets(&s_world));
-        set_row(2, 148, "子弹", v, s.focus == 2,
+        dr_fmt_compact(cbuf, sizeof(cbuf), s.game.res[DR_RES_BULLETS]);
+        snprintf(v, sizeof(v), "库%s 带%u",
+                 cbuf, dr_world_carry_bullets(&s_world));
+        set_row(2, 104, "子弹", v, s.focus == 2,
                 s.game.res[DR_RES_BULLETS] == 0 &&
                     dr_world_carry_bullets(&s_world) == 0);
+        // 只读装备行(填中段空白,出发前一目了然;不可聚焦)
+        set_row(3, 130, "武器", weapon_name(s.game.weapon_lv), false, true);
+        snprintf(v, sizeof(v), "%s HP%u", armor_name(s.game.armor_lv),
+                 dr_world_health_cap(&s.game));
+        set_row(4, 156, "护甲", v, false, true);
         if ((int32_t)(now_ms - s.embark_cd_ms) < 0)
             snprintf(v, sizeof(v), "%lds",
                      (long)((s.embark_cd_ms - now_ms + 999) / 1000));
         else
             snprintf(v, sizeof(v), "就绪");
-        set_row(3, 176, "出发远征", v, s.focus == 3, s.game.food == 0);
-        set_row(4, 200, "返回", "", s.focus == 4, false);
-        for (int i = 5; i < LIST_ROWS; i++) lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
+        set_row(5, 182, "出发远征", v, s.focus == 5, s.game.food == 0);
+        set_row(6, 208, "返回", "", s.focus == 6, false);
+        for (int i = 7; i < LIST_ROWS; i++) lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_pos(s_hint, 0, 228);
+        lv_obj_set_pos(s_hint, 0, 238);
         if (adj)
             lv_label_set_text(s_hint, "上加1 下减1(长按=5) 确定=下一项");
         else if (s.game.food == 0)
             lv_label_set_text(s_hint, "整备干肉后才能出发(库→带)");
         else
-            lv_label_set_text(s_hint, "背袋承重10:干肉/药各占1,子弹10发占1");
+            lv_label_set_text(s_hint, "干肉/药各占1,子弹10发占1");
         return;
     }
 
@@ -1034,10 +1088,13 @@ static void render_map(void) {
     for (int i = 4; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text_fmt(s_cells[0], "水 %u", s.game.water);
     lv_label_set_text_fmt(s_cells[1], "食 %u", s.game.food);
-    lv_label_set_text_fmt(s_cells[2], "HP %u/%u", s.game.hero_hp, s.game.hero_hp_max);
+    lv_label_set_text_fmt(s_cells[2], "HP%u/%u", s.game.hero_hp, s.game.hero_hp_max);
     lv_label_set_text_fmt(s_cells[3], "里 %u", dr_world_home_dist(&s.game));
+    // 危险警示:离家太远且无护甲 → "里"格文字变红(原 y306 提示行超出内容区永远不可见,I9)
+    lv_obj_set_style_text_color(s_cells[3],
+        lv_color_hex(dr_world_danger(&s.game) ? COL_ENEMY : COL_TEXT), 0);
 
-    // 方向行:显示目标格(雾内显示"未知")
+    // 方向行:显示目标格(雾内显示"未知");行距 22,尾行止于 278
     static const int dirs[4][2] = { {1,0},{0,1},{-1,0},{0,-1} };
     static const char *dir_names[4] = { "东", "南", "西", "北" };
     char v[24];
@@ -1050,17 +1107,14 @@ static void render_map(void) {
             snprintf(v, sizeof(v), "%s", map_tile_name(dr_world_tile(&s_world, tx, ty)));
         else
             snprintf(v, sizeof(v), "未知");
-        set_row(d, 158 + d * 24, dir_names[d], v, s.focus == d, false);
+        set_row(d, 168 + d * 22, dir_names[d], v, s.focus == d, false);
     }
     snprintf(v, sizeof(v), "余%u", s.game.food);
-    set_row(4, 158 + 4 * 24, "吃干肉", s.game.food ? v : "没有",
+    set_row(4, 168 + 4 * 22, "吃干肉", s.game.food ? v : "没有",
             s.focus == 4, s.game.food == 0);
     for (int i = 5; i < LIST_ROWS; i++) lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(s_hint, 0, 285);
-    lv_label_set_text(s_hint, dr_world_danger(&s.game)
-                                  ? "离小屋太远,没有护甲很危险"
-                                  : "回到小屋格即安全到家");
+    // 危险提示不再单列一行(旧 y285 超出内容区永远不可见,I9):
+    // 危险态由"里"格红字承担(见上方资源格)
 }
 
 static void render_ruin(void) {
@@ -1075,18 +1129,23 @@ static void render_ruin(void) {
     lv_label_set_text_fmt(s_cells[2], "HP %u", s.game.hero_hp);
     lv_label_set_text_fmt(s_cells[3], "火把 %s",
         (s.game.flags & ((uint64_t)1u << DR_FLAG_TORCH)) ? "有" : "无");
-    for (int i = 0; i < ROOM_CELLS; i++)
-        lv_obj_add_flag(s_room[i], LV_OBJ_FLAG_HIDDEN);
+    // 房间格阵(44..128):中段 114px 不再留白,中心格 = 当前地点色,搜索点
+    for (int i = 0; i < ROOM_CELLS; i++) {
+        lv_obj_clear_flag(s_room[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_bg_color(s_room[i],
+            lv_color_hex(i == 4 ? map_tile_color(dr_world_location(&s_world), true)
+                                : COL_PANEL), 0);
+    }
     lv_obj_add_flag(s_legend[0], LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_legend[1], LV_OBJ_FLAG_HIDDEN);
     bool has_torch =
         (s.game.flags & ((uint64_t)1u << DR_FLAG_TORCH)) != 0;
-    set_row(0, 158, "搜索", "再掷一次", s.focus == 0, false);
-    set_row(1, 182, "离开地点", "回荒野", s.focus == 1, false);
+    set_row(0, 150, "搜索", "再掷一次", s.focus == 0, false);
+    set_row(1, 174, "离开地点", "回荒野", s.focus == 1, false);
     for (int i = 2; i < LIST_ROWS; i++)
         lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(s_hint, 0, 215);
+    lv_obj_set_pos(s_hint, 0, 200);
     uint8_t loc = dr_world_location(&s_world);
     lv_label_set_text(s_hint,
         loc == DR_WT_CAVE
@@ -1095,11 +1154,6 @@ static void render_ruin(void) {
         : loc == DR_WT_TOWN  ? "废镇:学校与医院,或街头伏击"
         : loc == DR_WT_CITY  ? "废墟城市:空楼,士兵,或值钱的物资"
                               : "");
-}
-
-static const char *weapon_name(uint8_t lv) {
-    static const char *n[5] = { "拳", "骨矛", "铁剑", "钢剑", "步枪" };
-    return (lv < 5) ? n[lv] : n[0];
 }
 
 static void render_combat(void) {
@@ -1129,8 +1183,18 @@ static void render_combat(void) {
             : (int)(198u * s.game.hero_hp / (s.game.hero_hp_max ? s.game.hero_hp_max : 1));
         lv_obj_set_size(s_hpfill[i], w, 8);
     }
-    lv_obj_add_flag(s_loglines[0], LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_loglines[1], LV_OBJ_FLAG_HIDDEN);
+    // 中段战报:最近 3 条战斗日志(血条与动作行之间旧版整段留白 80px,I18)
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t *l = s_loglines[i];
+        const char *e = log_entry_newest_first(i);
+        if (!e) { lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN); continue; }
+        lv_obj_set_pos(l, 0, 100 + i * 15);
+        lv_obj_clear_flag(l, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(l, e);
+        lv_obj_set_style_text_color(l, log_fade(i, 3), 0);
+    }
+    for (int i = 3; i < LOG_VIS; i++)
+        lv_obj_add_flag(s_loglines[i], LV_OBJ_FLAG_HIDDEN);
     char a[24];
     snprintf(a, sizeof(a), "攻击(%s)", weapon_name(s.game.weapon_lv));
     set_act(&s_acts[0], a, s.focus == 0, 0);
@@ -1140,11 +1204,11 @@ static void render_combat(void) {
     set_act(&s_acts[2], a, s.focus == 2, 0);
     set_act(&s_acts[3], "逃跑", s.focus == 3, 0);
     for (int i = 0; i < 4; i++) {
-        lv_obj_set_pos(s_acts[i].row, 0, 168 + i * 24);
+        lv_obj_set_pos(s_acts[i].row, 0, 168 + i * 22);
         lv_obj_clear_flag(s_acts[i].row, LV_OBJ_FLAG_HIDDEN);
     }
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(s_hint, 0, 270);
+    lv_obj_set_pos(s_hint, 0, 262);   // 旧 y270 底边越界被裁 1/3(I10)
     lv_label_set_text(s_hint, "命中80%;敌按攻击间隔反击");
 }
 
@@ -1156,10 +1220,10 @@ static void render_trade(void) {
         lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
     }
     for (int i = 4; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text_fmt(s_cells[0], "木 %lu", (unsigned long)s.game.res[DR_RES_WOOD]);
-    lv_label_set_text_fmt(s_cells[1], "毛 %lu", (unsigned long)s.game.res[DR_RES_FUR]);
-    lv_label_set_text_fmt(s_cells[2], "鳞 %lu", (unsigned long)s.game.res[DR_RES_SCALES]);
-    lv_label_set_text_fmt(s_cells[3], "牙 %lu", (unsigned long)s.game.res[DR_RES_TEETH]);
+    cell_res(0, "木", s.game.res[DR_RES_WOOD]);
+    cell_res(1, "毛", s.game.res[DR_RES_FUR]);
+    cell_res(2, "鳞", s.game.res[DR_RES_SCALES]);
+    cell_res(3, "牙", s.game.res[DR_RES_TEETH]);
     bool post = s.game.building_lv[DR_BLD_TRADE_POST] > 0;
     bool compass = (s.game.flags & ((uint64_t)1u << DR_FLAG_COMPASS)) != 0;
     char v[28];
@@ -1188,14 +1252,20 @@ static void render_settings(void) {
     render_topbar("设置");
     render_tabs(3, forest_open(), nav_tab_enabled(2), -1);
     set_row(0, 52, "操作说明", "键位:三键", s.focus == 0, false);
-    set_row(1, 76, "重开本局", "需确认", s.focus == 1, false);
-    set_row(2, 100, "关于", "v0.6", s.focus == 2, false);
-    set_row(3, 124, "返回", "", s.focus == 3, false);
+    set_row(1, 80, "重开本局", "需确认", s.focus == 1, false);
+    set_row(2, 108, "关于", "v0.6", s.focus == 2, false);
+    char seed[12];
+    snprintf(seed, sizeof(seed), "%u", (unsigned)s.game.map_seed);
+    set_row(3, 136, "世界种子", seed, s.focus == 3, true);   // 只读:存档同图复现
+    set_row(4, 164, "存档", "自动·1分钟", false, true);    // 只读:落盘节奏说明
+    set_row(5, 192, "返回", "", s.focus == 5, false);
 }
 
 static void render_event(void) {
     uint16_t count = 0;
     const dr_event_t *ev = dr_events_table(&count);
+    if (count == 0) return;               // 空表守卫:不越界读 ev[0](I11)
+    if (s.ev_idx >= count) s.ev_idx = 0;
     const dr_event_t *e = &ev[s.ev_idx];
     lv_obj_clear_flag(s_veil, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_dpanel, LV_OBJ_FLAG_HIDDEN);
@@ -1204,9 +1274,12 @@ static void render_event(void) {
     lv_obj_add_flag(s_dtitle, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_dbody, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(s_dbody, 0, 0);      // 面板已有 pad10,子坐标不再叠加偏移
-    lv_obj_set_size(s_dbody, 176, 80);
+    // 选项底部锚定(mockup ④):最后一行固定 y=164;正文占满选项以上空间
+    // (≤3 选项时正文区 80→112px=7 行,给 M6 长文案留量,I12)
+    int bh = 164 - (e->choice_count - 1) * 24 - 8;
+    if (bh > 112) bh = 112;
+    lv_obj_set_size(s_dbody, 176, bh);
     set_dbody(dr_text(e->text_id));
-    // 选项底部锚定(mockup ④):最后一行固定 y=164,向上堆叠
     for (int i = 0; i < e->choice_count && i < 4; i++) {
         actrow_t *a = &s_dacts[i];
         lv_obj_clear_flag(a->row, LV_OBJ_FLAG_HIDDEN);
@@ -1255,10 +1328,10 @@ static void render_craft(void) {
         lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
     }
     for (int i = 4; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text_fmt(s_cells[0], "木 %lu", (unsigned long)s.game.res[DR_RES_WOOD]);
-    lv_label_set_text_fmt(s_cells[1], "革 %lu", (unsigned long)s.game.res[DR_RES_LEATHER]);
-    lv_label_set_text_fmt(s_cells[2], "鳞 %lu", (unsigned long)s.game.res[DR_RES_SCALES]);
-    lv_label_set_text_fmt(s_cells[3], "铁 %lu", (unsigned long)s.game.res[DR_RES_IRON]);
+    cell_res(0, "木", s.game.res[DR_RES_WOOD]);
+    cell_res(1, "革", s.game.res[DR_RES_LEATHER]);
+    cell_res(2, "鳞", s.game.res[DR_RES_SCALES]);
+    cell_res(3, "铁", s.game.res[DR_RES_IRON]);
     for (int i = 0; i < LOG_VIS; i++) lv_obj_add_flag(s_loglines[i], LV_OBJ_FLAG_HIDDEN);
 
     static const struct { uint8_t res; const char *label; } comps[] = {
@@ -1267,18 +1340,29 @@ static void render_craft(void) {
         { DR_RES_STEEL, "钢" },  { DR_RES_SULPHUR, "硫" },
         { DR_RES_CLOTH, "布" },
     };
-    int row = 0;
-    for (int c = 0; c < DR_CRAFT_KIND_COUNT && row < 9; c++) {  // 屏内上限 9 行
-        if (!dr_rules_craft_visible(&s.game, (uint8_t)c)) continue;
+    // 先收齐全部可见项,再做 8 行窗口(14 项全解锁时旧版硬截 9 行,
+    // 木桶/水箱/背囊/篷车/车队永远选不到,I8)
+    uint8_t vis[DR_CRAFT_KIND_COUNT];
+    int total = 0;
+    for (int c = 0; c < DR_CRAFT_KIND_COUNT; c++) {
+        if (dr_rules_craft_visible(&s.game, (uint8_t)c))
+            vis[total++] = (uint8_t)c;
+    }
+    s.craft_total = (uint8_t)total;
+    int rows = (total < 8) ? total : 8;   // 窗口 8 行:返回行 236 + 提示行 262 收进 278
+    if (s.craft_scroll + rows > total)
+        s.craft_scroll = (uint8_t)((total > rows) ? total - rows : 0);
+    for (int row = 0; row < rows; row++) {
+        uint8_t c = vis[s.craft_scroll + row];
         char t[20], v[64];
-        snprintf(t, sizeof(t), "%s", craft_name((uint8_t)c));
-        bool owned = dr_rules_craft_owned(&s.game, (uint8_t)c);
+        snprintf(t, sizeof(t), "%s", craft_name(c));
+        bool owned = dr_rules_craft_owned(&s.game, c);
         if (owned && c != DR_CRAFT_TORCH) {
             snprintf(v, sizeof(v), "已有");
         } else {
             int n = 0;
             for (int k = 0; k < 7; k++) {
-                uint32_t need = dr_rules_craft_need(&s.game, (uint8_t)c,
+                uint32_t need = dr_rules_craft_need(&s.game, c,
                                                     comps[k].res);
                 if (!need) continue;
                 if (n == 0) n = snprintf(v, sizeof(v), "%lu%s",
@@ -1288,17 +1372,29 @@ static void render_craft(void) {
             }
             if (n == 0) snprintf(v, sizeof(v), "免费");
         }
-        bool can = dr_rules_craft_ready(&s.game, (uint8_t)c);
+        bool can = dr_rules_craft_ready(&s.game, c);
         set_row(row, 52 + row * 23, t, v, s.focus == row, !can);
-        s.craft_row_map[row] = (uint8_t)c;
-        row++;
+        s.craft_row_map[row] = c;
     }
-    s.craft_row_count = (uint8_t)row;
-    for (int i = row; i < LIST_ROWS; i++)
+    s.craft_row_count = (uint8_t)rows;
+    for (int i = rows; i < LIST_ROWS; i++)
         lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
-    set_row(row, 52 + row * 23, "返回", "", s.focus == row, false);
+    set_row(rows, 52 + rows * 23, "返回", "", s.focus == rows, false);
+    if (s.craft_total > rows) {
+        // 滚动指示条:窗口贴右缘,滑块标示 8 行窗在 total 项中的位置
+        int track_h = rows * 23 - 1;
+        int thumb_h = track_h * rows / s.craft_total;
+        lv_obj_set_pos(s_strack, 195, 52);
+        lv_obj_set_size(s_strack, 2, track_h);
+        lv_obj_clear_flag(s_strack, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_pos(s_sthumb, 195,
+                       52 + (int)s.craft_scroll * (track_h - thumb_h) /
+                             (s.craft_total - rows));
+        lv_obj_set_size(s_sthumb, 2, thumb_h);
+        lv_obj_clear_flag(s_sthumb, LV_OBJ_FLAG_HIDDEN);
+    }
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(s_hint, 0, 258);
+    lv_obj_set_pos(s_hint, 0, 262);
     lv_label_set_text(s_hint, "武器/护甲自动装备取最优;水具/背具即刻生效");
 }
 
@@ -1344,11 +1440,12 @@ static int page_lines(void) {
         case PG_BUILD: return DR_BLD_KIND_COUNT + 1;
         case PG_VILLAGE: return 9;   // 采集/陷阱/采集者 + 职业窗口5 + 返回
         case PG_CRAFT:   return s.craft_row_count + 1;   // 可见制造项 + 返回
-        case PG_MAP: return 5;   // 整备3行+出发+返回 / 或 东南西北+吃干肉
+        case PG_MAP: return s.game.in_wilderness ? 5 : 7;
+        // 远征:东南西北+吃干肉 / 整备:干肉/药/子弹/武器(只读)/护甲(只读)/出发/返回
         case PG_RUIN: return 2;    // 搜索 / 离开
         case PG_COMBAT: return 4;
         case PG_TRADE: return 9;
-        case PG_SETTINGS: return 4;
+        case PG_SETTINGS: return 6;   // 说明/重开/关于/种子/存档/返回
         case PG_EVENT: {
             uint16_t c = 0;
             const dr_event_t *ev = dr_events_table(&c);
@@ -1416,12 +1513,13 @@ static bool row_enabled(int idx) {
             return idx == 8 || trade_affordable((uint8_t)idx);
         case PG_MAP:
             if (!s.game.in_wilderness) {
-                if (idx == 0 || idx == 4) return true;         // 干肉 / 返回
+                if (idx == 0 || idx == 6) return true;         // 干肉 / 返回
                 if (idx == 1) return s.game.res[DR_RES_MEDICINE] > 0 ||
                                    dr_world_carry_medicine(&s_world) > 0;
                 if (idx == 2) return s.game.res[DR_RES_BULLETS] > 0 ||
                                    dr_world_carry_bullets(&s_world) > 0;
-                // idx 3 = 出发:需已带干肉 + 冷却已过
+                if (idx == 3 || idx == 4) return false;        // 武器/护甲只读
+                // idx 5 = 出发:需已带干肉 + 冷却已过
                 uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
                 return s.game.food > 0 &&
                        (int32_t)(now_ms - s.embark_cd_ms) >= 0;
@@ -1431,6 +1529,8 @@ static bool row_enabled(int idx) {
         case PG_CRAFT:
             return idx >= s.craft_row_count ||      // 返回
                    dr_rules_craft_ready(&s.game, s.craft_row_map[idx]);
+        case PG_SETTINGS:
+            return idx != 3 && idx != 4;            // 世界种子/存档为只读行
         default:
             return true;   // 主页动作/设置/地图/弹窗选项均无禁用态
     }
@@ -1564,11 +1664,14 @@ static void list_action(int idx) {
                     s.dirty = true;
                     break;
                 }
-                if (idx == 3) {                     // 出发远征(需已带干肉)
+                if (idx == 5) {                     // 出发远征(需已带干肉)
                     if ((int32_t)(now_ms - s.embark_cd_ms) < 0) {
                         log_push("歇一歇再出发");
                     } else if (dr_world_embark(&s_world, &s.game)) {
                         log_push("踏上尘土路");
+                        // 焦点回"东"行:不重置会停在出发行位置(远征态=北行),
+                        // 玩家第一按就反向(I13)
+                        s.focus = 0;
                         s.save_pending = true;
                     } else {
                         log_push("先整备干肉(库→带)");
@@ -1758,12 +1861,14 @@ static void list_action(int idx) {
             break;
         }
         case PG_SETTINGS:
-            if (idx == 3) page_goto(PG_HOME);
+            if (idx == 5) page_goto(PG_HOME);
             else if (idx == 0) log_push("上/下选择 · 确定执行 · 长按返回");
             else if (idx == 1) {                       // 重开本局:需确认
                 s.confirm_from = 0;
                 page_goto(PG_CONFIRM);
             }
+            else if (idx == 3) log_push("种子决定地图与随机序列");
+            else if (idx == 4) log_push("每分钟或按键后自动落盘");
             else log_push("《小黑屋》A Dark Room 重制");
             break;
         default:
@@ -1934,8 +2039,7 @@ static bool forest_open(void) {
 static bool nav_tab_enabled(int i) {
     switch (i) {
         case 1: return forest_open();
-        case 2: return s.game.in_wilderness ||     // 远征中必须能看地图
-                       s.game.res[DR_RES_FOOD] > 0; // 有干肉即可出发(原版口径)
+        case 2: return false;   // M4 未拆门:与 OK 拦截一致,页签恒锁(不再假可用,I15)
         default: return true;
     }
 }
@@ -1949,13 +2053,13 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     if (ev == BSP_BTN_PRESS) {
         // 渲染静默期:渲染电流尖峰制造的幽灵按键紧贴渲染出现
         if (now_ms - s.last_render_ms < 60u) return;
-        // 出发整备调配:上/下=±1,确定=完成
+        // 出发整备调配:上/下=±1,确定=切下一项(干肉→药→子弹→完成)
         if (s.page == PG_MAP && s.outfit_adj >= 0) {
             static const uint8_t outfit_res[3] = {
                 DR_RES_FOOD, DR_RES_MEDICINE, DR_RES_BULLETS
             };
             if (btn == BSP_BTN_OK) {
-                s.outfit_adj = -1;
+                s.outfit_adj = (s.outfit_adj >= 2) ? -1 : s.outfit_adj + 1;
                 s.dirty = true;
                 return;
             }
@@ -2021,7 +2125,8 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             s.dirty = true;
             return;
         }
-        // 村庄页职业区滚动:窗口 5 行,到边缘且还有职业时先滚窗再移焦
+        // 村庄页职业区滚动:窗口 5 行,到边缘且还有职业时先滚窗再移焦。
+        // 条件放宽到"末行或返回行":锁定行被光标跳过时也必须能滚到后面的职业
         if (s.page == PG_VILLAGE && s.village_adj < 0 &&
             !s.game.in_wilderness) {
             if (btn == BSP_BTN_UP && s.focus == 3 && s.job_scroll > 0) {
@@ -2029,9 +2134,25 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                 s.dirty = true;
                 return;
             }
-            if (btn == BSP_BTN_DOWN && s.focus == 7 &&
+            if (btn == BSP_BTN_DOWN && s.focus >= 7 &&
                 s.job_scroll + 5 < DR_JOB_KIND_COUNT) {
                 s.job_scroll++;
+                s.dirty = true;
+                return;
+            }
+        }
+        // 制造页滚动:窗口 8 行,末行或返回行且下面还有项时先滚窗
+        // (已有/不可造行会被光标跳过,必须仍可滚到车队等后段项)
+        if (s.page == PG_CRAFT) {
+            if (btn == BSP_BTN_UP && s.focus == 0 && s.craft_scroll > 0) {
+                s.craft_scroll--;
+                s.dirty = true;
+                return;
+            }
+            if (btn == BSP_BTN_DOWN &&
+                s.focus >= s.craft_row_count - 1 &&
+                s.craft_scroll + s.craft_row_count < s.craft_total) {
+                s.craft_scroll++;
                 s.dirty = true;
                 return;
             }
@@ -2207,6 +2328,15 @@ void dr_sweep_next(void) {
     };
     static int i = 0;
     page_goto(order[i % (sizeof(order) / sizeof(order[0]))]);
-    if (s.page == PG_EVENT) s.ev_idx = 0;
+    if (s.page == PG_EVENT) {
+        uint16_t c = 0;
+        dr_events_table(&c);
+        if (c == 0) {   // 空表:M6 灌装前事件页无可渲染内容,跳过
+            i++;
+            page_goto(order[i % (sizeof(order) / sizeof(order[0]))]);
+        } else {
+            s.ev_idx = 0;
+        }
+    }
     i++;
 }
