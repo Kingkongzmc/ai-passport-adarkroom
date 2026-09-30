@@ -817,8 +817,16 @@ static void render_build(void) {
     };
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(s_hint, 0, 258);   // 圆屏内:距中心 98,半宽 ~69 可见
-    if (s.game.temp_lv <= DR_TEMP_COLD)
-        lv_label_set_text(s_hint, "屋里太冷,先点火再建造");   // 施工门槛(原版)
+    if (s.game.temp_lv <= DR_TEMP_COLD) {
+        if (s.game.fire_lv == DR_FIRE_DEAD)
+            lv_label_set_text(s_hint, "屋里太冷,先点火再建造");
+        else {
+            char warm[24];
+            static const char *tn[5] = { "冻结", "冷", "微温", "暖", "热" };
+            snprintf(warm, sizeof(warm), "回暖中:%s→微温", tn[s.game.temp_lv]);
+            lv_label_set_text(s_hint, warm);
+        }
+    }
     else
         lv_label_set_text(s_hint,
             s.focus < DR_BLD_KIND_COUNT ? bld_desc[s.focus] : "");
