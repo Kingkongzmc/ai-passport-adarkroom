@@ -210,8 +210,8 @@ static const char *fire_char(void) {
 
 static const char *bld_short(int id) {
     static const char *n[] = {"板车", "陷阱", "小屋", "猎屋", "贸站", "革坊",
-                              "熏房", "钢厂", "械库"};
-    return (id >= 0 && id < 9) ? n[id] : "建筑";
+                              "熏房", "钢厂", "械库", "工坊"};
+    return (id >= 0 && id < 10) ? n[id] : "建筑";
 }
 
 // 村庄页签门:森林剧情解锁(原版 unlockForest)
@@ -797,26 +797,26 @@ static void render_build(void) {
             }
             if (n == 0) snprintf(v, sizeof(v), "%s", warm ? "未解锁" : "太冷");
         }
-        set_row(i, 44 + i * 21, t, v, s.focus == i,
+        set_row(i, 38 + i * 20, t, v, s.focus == i,
                 !(can && build_affordable((uint8_t)i) && warm));
     }
-    set_row(DR_BLD_KIND_COUNT, 44 + DR_BLD_KIND_COUNT * 21, "返回", "",
+    set_row(DR_BLD_KIND_COUNT, 38 + DR_BLD_KIND_COUNT * 20, "返回", "",
             s.focus == DR_BLD_KIND_COUNT, false);
     // 底部说明:光标所选建筑的作用
     static const char *bld_desc[] = {
         "采集木材 +50",            // 板车(原版 carry more wood)
-        "每 90s 收获猎物,可叠 10", // 陷阱
-        "人口上限+4,流浪者入住",   // 小屋
-        "解锁猎人与捕兽人",         // 猎人小屋
-        "解锁游牧商人(只买不卖)",  // 贸易站
-        "解锁制革匠:毛皮变皮革",    // 制革坊
-        "解锁熏肉匠:肉变干肉",      // 熏肉房
-        "解锁炼钢工:铁+煤炼钢",     // 炼钢厂
-        "解锁军械工:钢+硫造子弹",   // 军械库
-        "解锁制造:武器护甲水具",    // 工坊
+        "每 90s 收猎物,可叠 10",   // 陷阱
+        "每屋 +4 人口",            // 小屋
+        "解锁猎人/捕兽人",          // 猎人小屋
+        "游牧商人(只买)",          // 贸易站
+        "解锁制革:毛→革",          // 制革坊
+        "解锁熏肉:肉→干肉",        // 熏肉房
+        "解锁炼钢:铁+煤→钢",       // 炼钢厂
+        "解锁军械:钢+硫→弹",       // 军械库
+        "解锁制造页(武器护甲)",    // 工坊
     };
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(s_hint, 0, 282);
+    lv_obj_set_pos(s_hint, 0, 258);   // 圆屏内:距中心 98,半宽 ~69 可见
     if (s.game.temp_lv <= DR_TEMP_COLD)
         lv_label_set_text(s_hint, "屋里太冷,先点火再建造");   // 施工门槛(原版)
     else
