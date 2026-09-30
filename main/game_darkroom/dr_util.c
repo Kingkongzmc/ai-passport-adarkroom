@@ -1,6 +1,8 @@
 // main/game_darkroom/dr_util.c —— CRC32 与 xorshift32 实现。
 #include "dr_util.h"
 
+#include <stdio.h>
+
 uint32_t dr_crc32(const void *data, size_t len) {
     static uint32_t table[256];
     static int table_ready = 0;
@@ -18,6 +20,25 @@ uint32_t dr_crc32(const void *data, size_t len) {
     for (size_t i = 0; i < len; i++)
         crc = table[(crc ^ p[i]) & 0xFFu] ^ (crc >> 8);
     return crc ^ 0xFFFFFFFFu;
+}
+
+void dr_fmt_compact(char *out, size_t n, uint32_t v) {
+    if (v < 10000u) {
+        snprintf(out, n, "%u", (unsigned)v);
+    } else if (v < 99500u) {
+        // 四舍五入到 0.1k;99500 起会溢出两位整数,交给整 k 档
+        unsigned t = (unsigned)((v + 50u) / 100u);
+        snprintf(out, n, "%u.%uk", t / 10u, t % 10u);
+    } else if (v < 999500u) {
+        snprintf(out, n, "%uk", (unsigned)((v + 500u) / 1000u));
+    } else {
+        // 0.1M 精度;≥99.95M 不再细分(资源量到不了)
+        uint32_t m = (v + 50000u) / 100000u;
+        if (m < 1000u)
+            snprintf(out, n, "%u.%uM", (unsigned)(m / 10u), (unsigned)(m % 10u));
+        else
+            snprintf(out, n, "%uM", (unsigned)(m / 10u));
+    }
 }
 
 void dr_rng_seed(dr_rng_t *r, uint32_t seed) {
