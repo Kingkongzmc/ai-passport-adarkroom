@@ -849,13 +849,18 @@ static void render_village(void) {
     snprintf(v, sizeof(v), "%u人 +1木", dr_rules_job_idle(&s.game));
     set_row(2, 98, "采集者", v, s.focus == 2, true);
 
-    // 行3..6:职业(确定进入人数调节;解锁挂对应建筑)
+    // 行3..6:职业(行内只显示人数,配方放底部提示行,避免数值列截断)
     static const char *job_names[4] = {"猎人", "捕兽人", "制革匠", "熏肉匠"};
-    static const char *job_desc[4] = {"+半毛半肉", "1肉换1饵", "5毛换1革", "5肉5木熏1干"};
+    static const char *job_desc[4] = {
+        "猎人:每 10s 每人 +半张毛皮 +半块肉",
+        "捕兽人:每 10s 每人 1 肉换 1 饵",
+        "制革匠:每 10s 每人 5 毛皮换 1 皮革",
+        "熏肉匠:每 10s 每人 5 肉 + 5 木熏 1 干肉",
+    };
     for (int r = 3; r <= 6; r++) {
         int job = village_row_job(r);
         bool ok = dr_rules_job_unlocked(&s.game, (uint8_t)job);
-        if (ok) snprintf(v, sizeof(v), "%u人 %s", s.game.job[job], job_desc[job]);
+        if (ok) snprintf(v, sizeof(v), "%u人", s.game.job[job]);
         else    snprintf(v, sizeof(v), "需%s",
                         job == DR_JOB_TANNER ? "制革坊" :
                         job == DR_JOB_CHARCUTIER ? "熏肉房" : "猎人小屋");
@@ -868,6 +873,11 @@ static void render_village(void) {
     lv_obj_set_pos(s_hint, 0, 238);
     if (adj) {
         lv_label_set_text(s_hint, "上加 下减(长按=5) 确定=完成");
+    } else if (s.focus >= 3 && s.focus <= 6 &&
+               dr_rules_job_unlocked(&s.game,
+                                     (uint8_t)village_row_job(s.focus))) {
+        // 光标停在职业行:显示该职业的产出配方(同建造页提示模式)
+        lv_label_set_text(s_hint, job_desc[village_row_job(s.focus)]);
     } else {
         // 概览:人口/上限 + 陷阱副产物与干肉(资源格放不下的那几样)
         char hbuf[96];
