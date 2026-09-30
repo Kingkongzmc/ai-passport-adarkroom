@@ -888,7 +888,7 @@ static void render_village(void) {
     set_row(8, 236, adj ? "完成调节" : "返回", "", s.focus == 8, false);
 
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(s_hint, 0, 238);
+    lv_obj_set_pos(s_hint, 0, 264);   // 返回行(236)之下,不再遮挡
     if (adj) {
         lv_label_set_text(s_hint, "上加 下减(长按=5) 确定=完成");
     } else if (s.focus >= 3 && s.focus <= 7 &&
@@ -1530,7 +1530,7 @@ static void list_action(int idx) {
             }
             break;
         case PG_VILLAGE:
-            if (idx == 7) { page_goto(PG_HOME); break; }
+            if (idx == 8) { page_goto(PG_HOME); break; }   // 返回(行8,滚动改版后移位)
             if (idx == 0 || idx == 1) { village_action(idx); break; }
             if (idx == 2) { log_push("采集者自动拾柴(+1木)"); break; }
             {   // 行3..6:进入人数调节
