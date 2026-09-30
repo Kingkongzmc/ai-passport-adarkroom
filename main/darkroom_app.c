@@ -1173,7 +1173,7 @@ static void render_trade(void) {
     }
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(s_hint, 0, 238);
-    lv_label_set_text(s_hint, "游牧商人:以毛皮/鳞/牙易货(M4 远征用品)");
+    lv_label_set_text(s_hint, "游牧商人:以毛皮/鳞/牙易货");
 }
 
 static void render_settings(void) {
@@ -1613,7 +1613,7 @@ static void list_action(int idx) {
                     case DR_MOVE_IRON:      log_push("发现铁矿!(回家后可派矿工)"); break;
                     case DR_MOVE_COAL:      log_push("发现煤矿!(回家后可派矿工)"); break;
                     case DR_MOVE_SULPHUR:   log_push("发现硫磺矿!(回家后可派矿工)"); break;
-                    case DR_MOVE_SHIP:      log_push("一艘坠毁的星舰躺在荒野上(M5)"); break;
+                    case DR_MOVE_SHIP:      log_push("一艘坠毁的星舰躺在荒野上"); break;
                     case DR_MOVE_HOUSE:
                     case DR_MOVE_CAVE:
                     case DR_MOVE_TOWN:
