@@ -1,4 +1,5 @@
 // main/game_darkroom/dr_world.c —— 世界生成与远征实现(对齐原版 world.js)。
+#include <stdio.h>
 #include <string.h>
 
 #include "dr_world.h"
@@ -80,6 +81,11 @@ void dr_world_gen(dr_world_t *w, uint16_t seed) {
     place_landmark(w, &r, DR_WT_IRON, 5);
     place_landmark(w, &r, DR_WT_COAL, 10);
     place_landmark(w, &r, DR_WT_SULPHUR, 20);
+    // 地点(setpieces.js:老屋×10 r0-45 / 洞穴×5 r3-10 / 废镇×10 r10-20 / 城市×20 r20-45)
+    for (int i = 0; i < 10; i++) place_landmark(w, &r, DR_WT_HOUSE, 8 + (i * 4) % 38);
+    for (int i = 0; i < 5; i++)  place_landmark(w, &r, DR_WT_CAVE, 3 + i * 2);
+    for (int i = 0; i < 10; i++) place_landmark(w, &r, DR_WT_TOWN, 10 + (i * 2) % 11);
+    for (int i = 0; i < 20; i++) place_landmark(w, &r, DR_WT_CITY, 20 + (i * 2) % 26);
     // 星舰(r28)与补给路:哨站只在通往星舰的路上(原版),间隔 8 格补水
     int sx = (dr_rng_below(&r, 2) == 0) ? 1 : -1;
     int sy = (dr_rng_below(&r, 2) == 0) ? 1 : -1;
@@ -134,8 +140,22 @@ bool dr_world_danger(const dr_game_t *g) {
 }
 
 uint8_t dr_world_water_cap(const dr_game_t *g) {
-    (void)g;
-    return 10;   // 切片三:+水袋10/木桶20/水箱50
+    uint8_t cap = 10;   // 基础(原版 BASE_WATER)
+    uint64_t f = g->flags;
+    if (f & ((uint64_t)1u << DR_FLAG_WATERSKIN)) cap += 10;
+    if (f & ((uint64_t)1u << DR_FLAG_CASK))      cap += 20;
+    if (f & ((uint64_t)1u << DR_FLAG_TANK))      cap += 50;
+    return cap;
+}
+
+// 背袋容量(原版 Path.getCapacity:基础10 +背囊10 +篷车30 +车队60;单位0.1)
+uint16_t dr_world_bag_cap(const dr_game_t *g) {
+    uint16_t cap = DR_BAG_CAP_TENTHS;
+    uint64_t f = g->flags;
+    if (f & ((uint64_t)1u << DR_FLAG_RUCKSACK)) cap += 100;
+    if (f & ((uint64_t)1u << DR_FLAG_WAGON))    cap += 300;
+    if (f & ((uint64_t)1u << DR_FLAG_CONVOY))   cap += 600;
+    return cap;
 }
 
 uint8_t dr_world_health_cap(const dr_game_t *g) {
@@ -258,6 +278,10 @@ dr_move_result_t dr_world_move(dr_world_t *w, dr_game_t *g, int dx, int dy) {
         case DR_WT_COAL:     w->visited_coal = true;     return DR_MOVE_COAL;
         case DR_WT_SULPHUR:  w->visited_sulphur = true;  return DR_MOVE_SULPHUR;
         case DR_WT_SHIP:     return DR_MOVE_SHIP;
+        case DR_WT_HOUSE:    w->location = DR_WT_HOUSE;  return DR_MOVE_HOUSE;
+        case DR_WT_CAVE:     w->location = DR_WT_CAVE;   return DR_MOVE_CAVE;
+        case DR_WT_TOWN:     w->location = DR_WT_TOWN;   return DR_MOVE_TOWN;
+        case DR_WT_CITY:     w->location = DR_WT_CITY;   return DR_MOVE_CITY;
         default:             return DR_MOVE_OK;
     }
 }
@@ -328,8 +352,9 @@ bool dr_world_outfit_add(dr_world_t *w, dr_game_t *g, uint8_t res, int16_t delta
     if (delta > 0) {
         if (*store < (uint32_t)delta) return false;
         uint64_t weight = dr_world_bag_weight(g, w);
+        uint16_t cap = dr_world_bag_cap(g);
         for (int i = 0; i < delta; i++) {
-            if (weight + unit_w > DR_BAG_CAP_TENTHS) return i > 0;
+            if (weight + unit_w > cap) return i > 0;
             weight += unit_w;
             (*store)--;
             if (carry) (*carry)++;
@@ -417,7 +442,7 @@ static void fight_loot(dr_world_t *w, dr_game_t *g, dr_rng_t *r) {
                      dr_rng_below(r, (uint32_t)(e->loot[i].max - e->loot[i].min + 1));
         for (uint32_t k = 0; k < n; k++) {
             // 战利品入包(承重满即弃,原版口径)
-            if (dr_world_bag_weight(g, w) + 10u > DR_BAG_CAP_TENTHS) return;
+            if (dr_world_bag_weight(g, w) + 10u > dr_world_bag_cap(g)) return;
             w->loot[e->loot[i].res]++;
         }
     }
@@ -479,6 +504,126 @@ dr_fight_result_t dr_world_fight_flee(dr_world_t *w, dr_game_t *g) {
     dr_fight_result_t out;
     enemy_turn(w, g, r, &out);
     return out;
+}
+
+// ---- 地点搜索(设备适配"单次搜索"模型;DESIGN §9.8 地点表) ----
+uint8_t dr_world_location(const dr_world_t *w) { return w->location; }
+
+const char *dr_world_location_name(uint8_t tile) {
+    switch ((dr_world_tile_t)tile) {
+        case DR_WT_HOUSE: return "老屋";
+        case DR_WT_CAVE:  return "潮湿洞穴";
+        case DR_WT_TOWN:  return "废镇";
+        case DR_WT_CITY:  return "废墟城市";
+        default:          return "";
+    }
+}
+
+void dr_world_location_leave(dr_world_t *w) { w->location = 0; }
+
+// 战利品并入背袋(承重满即弃;返回实际入包数)
+static uint32_t loot_add(dr_world_t *w, dr_game_t *g, uint8_t res, uint32_t n) {
+    uint32_t added = 0;
+    for (uint32_t k = 0; k < n; k++) {
+        if (dr_world_bag_weight(g, w) + 10u > dr_world_bag_cap(g)) break;
+        w->loot[res]++;
+        added++;
+    }
+    return added;
+}
+
+static void loc_fight(dr_world_t *w, dr_game_t *g, uint8_t enemy) {
+    (void)g;
+    w->fight_enemy = enemy;
+    w->fight_hp = k_enemies[enemy].hp;
+    w->fight_round = 0;
+}
+
+dr_loc_result_t dr_world_location_search(dr_world_t *w, dr_game_t *g,
+                                         char *out, size_t outsz) {
+    if (!w->location || !g->in_wilderness) return DR_LOC_NONE;
+    dr_rng_t *r = fight_rng(g);
+    if (out && outsz) out[0] = '\0';
+    uint32_t roll = dr_rng_below(r, 1000u);
+    size_t len = 0;
+#define APPEND(...) do { if (out && outsz > len + 1) \
+        len += (size_t)snprintf(out + len, outsz - len, __VA_ARGS__); } while (0)
+
+    switch ((dr_world_tile_t)w->location) {
+        case DR_WT_HOUSE:   // 25% 药 / 50% 补水+补给 / 25% 遭遇
+            if (roll < 250) {
+                uint32_t n = 2 + dr_rng_below(r, 4);
+                APPEND("药+%lu", (unsigned long)loot_add(w, g, DR_RES_MEDICINE, n));
+                return DR_LOC_LOOT;
+            }
+            if (roll < 750) {
+                g->water = dr_world_water_cap(g);
+                uint32_t m = 0, l = 0, c = 0;
+                if (dr_rng_chance(r, 800)) m = 1 + dr_rng_below(r, 10);
+                if (dr_rng_chance(r, 200)) l = 1 + dr_rng_below(r, 10);
+                if (dr_rng_chance(r, 500)) c = 1 + dr_rng_below(r, 10);
+                APPEND("水满 干肉+%lu 布+%lu 革+%lu",
+                       (unsigned long)loot_add(w, g, DR_RES_FOOD, m),
+                       (unsigned long)loot_add(w, g, DR_RES_CLOTH, c),
+                       (unsigned long)loot_add(w, g, DR_RES_LEATHER, l));
+                return DR_LOC_WATER;
+            }
+            loc_fight(w, g, DR_ENEMY_GAUNT);
+            return DR_LOC_FIGHT;
+        case DR_WT_CAVE:    // 需火把;50% 野兽战 / 50% 深处物资
+            if (!(g->flags & ((uint64_t)1u << DR_FLAG_TORCH)))
+                return DR_LOC_NEED_TORCH;
+            g->flags &= ~((uint64_t)1u << DR_FLAG_TORCH);   // 火把消耗
+            if (roll < 500) {
+                loc_fight(w, g, DR_ENEMY_BEAST);
+                return DR_LOC_FIGHT;
+            }
+            {
+                uint32_t s = 5 + dr_rng_below(r, 6);
+                uint32_t t = dr_rng_chance(r, 800) ? 1 + dr_rng_below(r, 5) : 0;
+                APPEND("鳞+%lu 牙+%lu",
+                       (unsigned long)loot_add(w, g, DR_RES_SCALES, s),
+                       (unsigned long)loot_add(w, g, DR_RES_TEETH, t));
+                return DR_LOC_LOOT;
+            }
+        case DR_WT_TOWN:    // 30% 学校(火把→thug) / 30% 伏击 / 40% 医院
+            if (roll < 300) {
+                if (!(g->flags & ((uint64_t)1u << DR_FLAG_TORCH)))
+                    return DR_LOC_NEED_TORCH;
+                g->flags &= ~((uint64_t)1u << DR_FLAG_TORCH);
+                loc_fight(w, g, DR_ENEMY_SCAVENGER);
+                return DR_LOC_FIGHT;
+            }
+            if (roll < 600) {
+                loc_fight(w, g, DR_ENEMY_SCAVENGER);
+                return DR_LOC_FIGHT;
+            }
+            {
+                uint32_t n = 2 + dr_rng_below(r, 4);
+                APPEND("药+%lu", (unsigned long)loot_add(w, g, DR_RES_MEDICINE, n));
+                return DR_LOC_LOOT;
+            }
+        case DR_WT_CITY:    // 20% 空 / 30% 战(soldier 或 sniper) / 50% 大搜刮
+            if (roll < 200) return DR_LOC_EMPTY;
+            if (roll < 500) {
+                loc_fight(w, g, dr_rng_below(r, 2) ? DR_ENEMY_SOLDIER
+                                                   : DR_ENEMY_SNIPER);
+                return DR_LOC_FIGHT;
+            }
+            {
+                uint32_t c = dr_rng_chance(r, 800) ? 1 + dr_rng_below(r, 5) : 0;
+                uint32_t m = dr_rng_chance(r, 800) ? 1 + dr_rng_below(r, 5) : 0;
+                uint32_t b = dr_rng_chance(r, 500) ? 1 + dr_rng_below(r, 5) : 0;
+                APPEND("布+%lu 干肉+%lu 子弹+%lu",
+                       (unsigned long)loot_add(w, g, DR_RES_CLOTH, c),
+                       (unsigned long)loot_add(w, g, DR_RES_FOOD, m),
+                       (unsigned long)loot_add(w, g, DR_RES_BULLETS, b));
+                return DR_LOC_LOOT;
+            }
+        default:
+            return DR_LOC_NONE;
+    }
+#undef APPEND
 }
 
 // 远征中吃干肉:回 8 HP(原版 meat heal 8)

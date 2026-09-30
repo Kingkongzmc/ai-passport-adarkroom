@@ -74,9 +74,8 @@ typedef struct { bsp_btn_t btn; bsp_btn_ev_t ev; } key_event_t;
 
 // ---- 页面 ----
 typedef enum {
-    PG_TITLE = 0, PG_HOME, PG_BUILD, PG_VILLAGE, PG_MAP,
-    PG_RUIN, PG_COMBAT, PG_TRADE, PG_SETTINGS,
-    PG_EVENT, PG_CONFIRM,
+    PG_TITLE = 0, PG_HOME, PG_BUILD, PG_VILLAGE, PG_MAP,    PG_RUIN, PG_COMBAT, PG_TRADE, PG_SETTINGS,
+    PG_EVENT, PG_CONFIRM, PG_CRAFT,
 } page_t;
 
 // ---- 状态 ----
@@ -87,6 +86,9 @@ static struct {
     uint8_t confirm_from;      // 确认页来源(0=设置重开 1=贸易全卖)
     int8_t nav_focus;          // 主页导航焦点(-1=动作区,0..3=tab)
     int8_t village_adj;        // 村庄调节模式:在调的职业(-1=未调节)
+    uint8_t job_scroll;        // 村庄职业区滚动偏移(窗口 5 行)
+    uint8_t craft_row_map[16]; // 制造页:行号 → 制造项
+    uint8_t craft_row_count;   // 制造页:可见制造行数(不含返回)
     bool prev_gather_ready;    // 上一拍冷却秒数(变化即重绘:冷却条/倒计时逐拍走)
     bool prev_trap_ready;
     bool prev_stoke_active;    // 主页添柴冷却条活动态(结束瞬间也要重绘一次)
@@ -674,7 +676,8 @@ static void clear_scene(void) {
 // ===================================================================
 static int home_lines(void) {
     int n = 2;   // 点火/添柴 + 建造…
-    if (s.game.building_lv[DR_BLD_TRADE_POST] > 0) n++;   // 贸易…
+    if (s.game.building_lv[DR_BLD_WORKSHOP] > 0) n++;   // 制造…
+    if (s.game.building_lv[DR_BLD_TRADE_POST] > 0) n++; // 贸易…
     return n;
 }
 
@@ -714,6 +717,12 @@ static void render_home(uint32_t now_ms) {
     lv_obj_set_pos(s_acts[idx].row, 0, gy);
     gy += 24;
     idx++;
+    if (s.game.building_lv[DR_BLD_WORKSHOP] > 0) {
+        set_act(&s_acts[idx], "制造…", act_focus && s.focus == idx, 0);
+        lv_obj_set_pos(s_acts[idx].row, 0, gy);
+        gy += 24;
+        idx++;
+    }
     if (s.game.building_lv[DR_BLD_TRADE_POST] > 0) {
         set_act(&s_acts[idx], "贸易…", act_focus && s.focus == idx, 0);
         lv_obj_set_pos(s_acts[idx].row, 0, gy);
@@ -814,15 +823,11 @@ static void render_build(void) {
             s.focus < DR_BLD_KIND_COUNT ? bld_desc[s.focus] : "");
 }
 
-// 村庄页行号 → 职业枚举(行 3..6 可调节)
-static int8_t village_row_job(int row) {
-    switch (row) {
-        case 3: return DR_JOB_HUNTER;
-        case 4: return DR_JOB_TRAPPER;
-        case 5: return DR_JOB_TANNER;
-        case 6: return DR_JOB_CHARCUTIER;
-        default: return -1;
-    }
+// 村庄页职业区行号(3..7)→ 职业枚举(含滚动偏移;-1=窗口外)
+static int village_row_job(int row) {
+    if (row < 3 || row > 7) return -1;
+    int job = (row - 3) + s.job_scroll;
+    return (job >= 0 && job < DR_JOB_KIND_COUNT) ? job : -1;
 }
 
 static void render_village(void) {
@@ -850,31 +855,43 @@ static void render_village(void) {
     snprintf(v, sizeof(v), "%u人 +1木", dr_rules_job_idle(&s.game));
     set_row(2, 98, "采集者", v, s.focus == 2, true);
 
-    // 行3..6:职业(行内只显示人数,配方放底部提示行,避免数值列截断)
-    static const char *job_names[4] = {"猎人", "捕兽人", "制革匠", "熏肉匠"};
-    static const char *job_desc[4] = {
+    // 行3..7:职业窗口(9 职业,滚动 5 行可见;行内只显示人数,配方在提示行)
+    static const char *job_names[DR_JOB_KIND_COUNT] = {
+        "猎人", "捕兽人", "制革匠", "熏肉匠", "铁矿工",
+        "煤矿工", "硫磺矿工", "炼钢工", "军械工",
+    };
+    static const char *job_desc[DR_JOB_KIND_COUNT] = {
         "猎人:每 10s 每人 +半张毛皮 +半块肉",
         "捕兽人:每 10s 每人 1 肉换 1 饵",
         "制革匠:每 10s 每人 5 毛皮换 1 皮革",
         "熏肉匠:每 10s 每人 5 肉 + 5 木熏 1 干肉",
+        "铁矿工:每 10s 每人吃 1 干肉产 1 铁",
+        "煤矿工:每 10s 每人吃 1 干肉产 1 煤",
+        "硫磺矿工:每 10s 每人吃 1 干肉产 1 硫",
+        "炼钢工:每 10s 每人 1 铁 + 1 煤炼 1 钢",
+        "军械工:每 10s 每人 1 钢 + 1 硫造 1 子弹",
     };
-    for (int r = 3; r <= 6; r++) {
+    static const char *job_need[DR_JOB_KIND_COUNT] = {
+        "猎人小屋", "猎人小屋", "制革坊", "熏肉房",
+        "到访铁矿", "到访煤矿", "到访硫磺矿", "炼钢厂", "军械库",
+    };
+    for (int r = 3; r <= 7; r++) {
         int job = village_row_job(r);
+        if (job < 0) { set_row(r, 121 + (r - 3) * 23, "…", "", false, true); continue; }
         bool ok = dr_rules_job_unlocked(&s.game, (uint8_t)job);
         if (ok) snprintf(v, sizeof(v), "%u人", s.game.job[job]);
-        else    snprintf(v, sizeof(v), "需%s",
-                        job == DR_JOB_TANNER ? "制革坊" :
-                        job == DR_JOB_CHARCUTIER ? "熏肉房" : "猎人小屋");
+        else    snprintf(v, sizeof(v), "需%s", job_need[job]);
         set_row(r, 121 + (r - 3) * 23, job_names[job], v,
                 s.focus == r, !ok);
     }
-    set_row(7, 213, adj ? "完成调节" : "返回", "", s.focus == 7, false);
+    set_row(8, 236, adj ? "完成调节" : "返回", "", s.focus == 8, false);
 
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(s_hint, 0, 238);
     if (adj) {
         lv_label_set_text(s_hint, "上加 下减(长按=5) 确定=完成");
-    } else if (s.focus >= 3 && s.focus <= 6 &&
+    } else if (s.focus >= 3 && s.focus <= 7 &&
+               village_row_job(s.focus) >= 0 &&
                dr_rules_job_unlocked(&s.game,
                                      (uint8_t)village_row_job(s.focus))) {
         // 光标停在职业行:显示该职业的产出配方(同建造页提示模式)
@@ -909,6 +926,10 @@ static uint32_t map_tile_color(uint8_t t, bool seen) {
         case DR_WT_SULPHUR:   return 0xC9C25B;
         case DR_WT_OUTPOST:   return 0x5BC8C8;
         case DR_WT_SHIP:      return 0xC85BC8;
+        case DR_WT_HOUSE:     return 0xC9A06B;
+        case DR_WT_CAVE:      return 0x6B7FC9;
+        case DR_WT_TOWN:      return 0xC96B8E;
+        case DR_WT_CITY:      return 0x8E6BC9;
         default:              return COL_BG;
     }
 }
@@ -924,6 +945,10 @@ static const char *map_tile_name(uint8_t t) {
         case DR_WT_SULPHUR:  return "硫磺矿";
         case DR_WT_OUTPOST:  return "哨站";
         case DR_WT_SHIP:     return "星舰";
+        case DR_WT_HOUSE:    return "老屋";
+        case DR_WT_CAVE:     return "洞穴";
+        case DR_WT_TOWN:     return "废镇";
+        case DR_WT_CITY:     return "城市";
         default:             return "?";
     }
 }
@@ -1030,34 +1055,37 @@ static void render_map(void) {
 }
 
 static void render_ruin(void) {
-    render_topbar("废村");
+    render_topbar(dr_world_location_name(dr_world_location(&s_world)));
     for (int i = 0; i < 4; i++) {
         cell_base(i, i * 49, 24);
         lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
     }
     for (int i = 4; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(s_cells[0], "水 4");
-    lv_label_set_text(s_cells[1], "食 3");
-    lv_label_set_text(s_cells[2], "HP 8");
-    lv_label_set_text(s_cells[3], "包 5/8");
-    for (int i = 0; i < ROOM_CELLS; i++) {
-        lv_obj_clear_flag(s_room[i], LV_OBJ_FLAG_HIDDEN);
-        lv_color_t c = lv_color_hex(COL_BG);
-        if (i == 2) c = lv_color_hex(COL_ME);
-        else if (i == 4) c = lv_color_hex(COL_ENEMY);
-        else if (i < 6) c = lv_color_hex(COL_CD);
-        lv_obj_set_style_bg_color(s_room[i], c, 0);
-    }
-    lv_obj_clear_flag(s_legend[0], LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(s_legend[1], LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(s_legend[0], 0, 132);
-    lv_obj_set_pos(s_legend[1], 0, 147);
-    lv_label_set_text(s_legend[0], "■你 ■敌人");
-    lv_label_set_text(s_legend[1], "■已搜 ■未搜");
-    set_row(0, 158, "东 房间(未搜)", "", s.focus == 0, false);
-    set_row(1, 182, "南 房间(空)", "", s.focus == 1, false);
-    set_row(2, 206, "西北 房间(敌人)", "遭遇", s.focus == 2, false);
-    set_row(3, 230, "离开地点", "", s.focus == 3, false);
+    lv_label_set_text_fmt(s_cells[0], "水 %u", s.game.water);
+    lv_label_set_text_fmt(s_cells[1], "食 %u", s.game.food);
+    lv_label_set_text_fmt(s_cells[2], "HP %u", s.game.hero_hp);
+    lv_label_set_text_fmt(s_cells[3], "火把 %s",
+        (s.game.flags & ((uint64_t)1u << DR_FLAG_TORCH)) ? "有" : "无");
+    for (int i = 0; i < ROOM_CELLS; i++)
+        lv_obj_add_flag(s_room[i], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_legend[0], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_legend[1], LV_OBJ_FLAG_HIDDEN);
+    bool has_torch =
+        (s.game.flags & ((uint64_t)1u << DR_FLAG_TORCH)) != 0;
+    set_row(0, 158, "搜索", "再掷一次", s.focus == 0, false);
+    set_row(1, 182, "离开地点", "回荒野", s.focus == 1, false);
+    for (int i = 2; i < LIST_ROWS; i++)
+        lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(s_hint, 0, 215);
+    uint8_t loc = dr_world_location(&s_world);
+    lv_label_set_text(s_hint,
+        loc == DR_WT_CAVE
+            ? (has_torch ? "洞穴幽深;火把只够一次深入" : "需要火把(工坊:1木1布)")
+        : loc == DR_WT_HOUSE ? "老屋:也许有药,也许有埋伏"
+        : loc == DR_WT_TOWN  ? "废镇:学校与医院,或街头伏击"
+        : loc == DR_WT_CITY  ? "废墟城市:空楼,士兵,或值钱的物资"
+                              : "");
 }
 
 static const char *weapon_name(uint8_t lv) {
@@ -1152,7 +1180,7 @@ static void render_settings(void) {
     render_tabs(3, forest_open(), nav_tab_enabled(2), -1);
     set_row(0, 52, "操作说明", "键位:三键", s.focus == 0, false);
     set_row(1, 76, "重开本局", "需确认", s.focus == 1, false);
-    set_row(2, 100, "关于", "v0.5", s.focus == 2, false);
+    set_row(2, 100, "关于", "v0.6", s.focus == 2, false);
     set_row(3, 124, "返回", "", s.focus == 3, false);
 }
 
@@ -1201,6 +1229,70 @@ static void render_confirm(void) {
         lv_obj_add_flag(s_dacts[i].row, LV_OBJ_FLAG_HIDDEN);
 }
 
+// ---- 制造页(工坊建成后从小屋页进入;原版 crafts,§9.7) ----
+static const char *craft_name(uint8_t c) {
+    static const char *n[DR_CRAFT_KIND_COUNT] = {
+        "火把", "骨矛", "铁剑", "钢剑", "步枪",
+        "皮甲", "铁甲", "钢甲",
+        "水袋", "木桶", "水箱", "背囊", "篷车", "车队",
+    };
+    return n[c];
+}
+
+static void render_craft(void) {
+    render_topbar("制造");
+    for (int i = 0; i < 4; i++) {
+        cell_base(i, i * 49, 24);
+        lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    for (int i = 4; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text_fmt(s_cells[0], "木 %lu", (unsigned long)s.game.res[DR_RES_WOOD]);
+    lv_label_set_text_fmt(s_cells[1], "革 %lu", (unsigned long)s.game.res[DR_RES_LEATHER]);
+    lv_label_set_text_fmt(s_cells[2], "鳞 %lu", (unsigned long)s.game.res[DR_RES_SCALES]);
+    lv_label_set_text_fmt(s_cells[3], "铁 %lu", (unsigned long)s.game.res[DR_RES_IRON]);
+    for (int i = 0; i < LOG_VIS; i++) lv_obj_add_flag(s_loglines[i], LV_OBJ_FLAG_HIDDEN);
+
+    static const struct { uint8_t res; const char *label; } comps[] = {
+        { DR_RES_WOOD, "木" },   { DR_RES_TEETH, "牙" },
+        { DR_RES_LEATHER, "革" },{ DR_RES_IRON, "铁" },
+        { DR_RES_STEEL, "钢" },  { DR_RES_SULPHUR, "硫" },
+        { DR_RES_CLOTH, "布" },
+    };
+    int row = 0;
+    for (int c = 0; c < DR_CRAFT_KIND_COUNT && row < LIST_ROWS - 1; c++) {
+        if (!dr_rules_craft_visible(&s.game, (uint8_t)c)) continue;
+        char t[20], v[64];
+        snprintf(t, sizeof(t), "%s", craft_name((uint8_t)c));
+        bool owned = dr_rules_craft_owned(&s.game, (uint8_t)c);
+        if (owned && c != DR_CRAFT_TORCH) {
+            snprintf(v, sizeof(v), "已有");
+        } else {
+            int n = 0;
+            for (int k = 0; k < 7; k++) {
+                uint32_t need = dr_rules_craft_need(&s.game, (uint8_t)c,
+                                                    comps[k].res);
+                if (!need) continue;
+                if (n == 0) n = snprintf(v, sizeof(v), "%lu%s",
+                                         (unsigned long)need, comps[k].label);
+                else n += snprintf(v + n, sizeof(v) - n, "%lu%s",
+                                   (unsigned long)need, comps[k].label);
+            }
+            if (n == 0) snprintf(v, sizeof(v), "免费");
+        }
+        bool can = dr_rules_craft_ready(&s.game, (uint8_t)c);
+        set_row(row, 52 + row * 23, t, v, s.focus == row, !can);
+        s.craft_row_map[row] = (uint8_t)c;
+        row++;
+    }
+    s.craft_row_count = (uint8_t)row;
+    for (int i = row; i < LIST_ROWS; i++)
+        lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
+    set_row(row, 52 + row * 23, "返回", "", s.focus == row, false);
+    lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(s_hint, 0, 258);
+    lv_label_set_text(s_hint, "武器/护甲自动装备取最优;水具/背具即刻生效");
+}
+
 static void render_title(void) {
     lv_label_set_text(s_topbar, "");
     lv_label_set_text(s_batt, "");
@@ -1226,6 +1318,7 @@ static void render(void) {
         case PG_SETTINGS:render_settings(); break;
         case PG_EVENT:   render_event(); break;
         case PG_CONFIRM: render_confirm(); break;
+        case PG_CRAFT:   render_craft(); break;
     }
 }
 
@@ -1240,9 +1333,10 @@ static int page_lines(void) {
     switch (s.page) {
         case PG_HOME: return home_lines();
         case PG_BUILD: return DR_BLD_KIND_COUNT + 1;
-        case PG_VILLAGE: return 8;
+        case PG_VILLAGE: return 9;   // 采集/陷阱/采集者 + 职业窗口5 + 返回
+        case PG_CRAFT:   return s.craft_row_count + 1;   // 可见制造项 + 返回
         case PG_MAP: return 5;   // 整备3行+出发+返回 / 或 东南西北+吃干肉
-        case PG_RUIN: return 4;
+        case PG_RUIN: return 2;    // 搜索 / 离开
         case PG_COMBAT: return 4;
         case PG_TRADE: return 9;
         case PG_SETTINGS: return 4;
@@ -1301,10 +1395,14 @@ static bool row_enabled(int idx) {
                     build_affordable((uint8_t)idx) &&
                     s.game.temp_lv > DR_TEMP_COLD);     // 过冷也不可选(提示见页底)
         case PG_VILLAGE:
-            if (idx == 0 || idx == 7) return true;      // 采集 / 返回
+            if (idx == 0 || idx == 8) return true;      // 采集 / 返回
             if (idx == 1) return s.game.building_lv[DR_BLD_TRAP] > 0;
             if (idx == 2) return false;                 // 采集者自动,不可调
-            return dr_rules_job_unlocked(&s.game, (uint8_t)village_row_job(idx));
+            {   // 职业窗口(窗口外恒禁用)
+                int job = village_row_job(idx);
+                if (job < 0) return false;
+                return dr_rules_job_unlocked(&s.game, (uint8_t)job);
+            }
         case PG_TRADE:
             return idx == 8 || trade_affordable((uint8_t)idx);
         case PG_MAP:
@@ -1321,8 +1419,11 @@ static bool row_enabled(int idx) {
             }
             if (idx == 4) return s.game.food > 0;   // 吃干肉
             return idx < 4;                          // 东南西北
+        case PG_CRAFT:
+            return idx >= s.craft_row_count ||      // 返回
+                   dr_rules_craft_ready(&s.game, s.craft_row_map[idx]);
         default:
-            return true;   // 主页动作/设置/弹窗选项均无禁用态
+            return true;   // 主页动作/设置/地图/弹窗选项均无禁用态
     }
 }
 
@@ -1365,6 +1466,10 @@ static void home_action(int idx) {
         return;
     }
     if (idx == 1) { page_goto(PG_BUILD); return; }   // 建造…
+    if (idx == 2 && s.game.building_lv[DR_BLD_WORKSHOP] > 0) {
+        page_goto(PG_CRAFT);                          // 制造…
+        return;
+    }
     page_goto(PG_TRADE);                              // 贸易…(行存在即已建贸易站)
 }
 
@@ -1508,6 +1613,18 @@ static void list_action(int idx) {
                     case DR_MOVE_COAL:      log_push("发现煤矿!(回家后可派矿工)"); break;
                     case DR_MOVE_SULPHUR:   log_push("发现硫磺矿!(回家后可派矿工)"); break;
                     case DR_MOVE_SHIP:      log_push("一艘坠毁的星舰躺在荒野上(M5)"); break;
+                    case DR_MOVE_HOUSE:
+                    case DR_MOVE_CAVE:
+                    case DR_MOVE_TOWN:
+                    case DR_MOVE_CITY: {
+                        char msg[48];
+                        snprintf(msg, sizeof(msg), "来到了%s",
+                                 dr_world_location_name(dr_world_location(
+                                     &s_world)));
+                        log_push(msg);
+                        page_goto(PG_RUIN);
+                        break;
+                    }
                     case DR_MOVE_BLOCKED:   log_push("世界的尽头"); break;
                     case DR_MOVE_OK:        s.save_pending = true; break;
                 }
@@ -1564,10 +1681,40 @@ static void list_action(int idx) {
             s.dirty = true;
             break;
         }
-        case PG_RUIN:
-            if (idx == 3) page_goto(PG_MAP);
-            else log_push("房间系统切片三实装");
+        case PG_RUIN: {   // 地点页(老屋/洞穴/废镇/城市):搜索/离开
+            if (idx == 1 || !dr_world_location(&s_world)) {
+                dr_world_location_leave(&s_world);
+                page_goto(PG_MAP);
+                break;
+            }
+            char line[64] = {0};
+            dr_loc_result_t r = dr_world_location_search(&s_world, &s.game,
+                                                         line, sizeof(line));
+            switch (r) {
+                case DR_LOC_LOOT:
+                case DR_LOC_WATER: {
+                    char msg[80];
+                    snprintf(msg, sizeof(msg), "搜到:%s", line);
+                    log_push(msg);
+                    s.save_pending = true;
+                    break;
+                }
+                case DR_LOC_FIGHT: {
+                    char msg[48];
+                    snprintf(msg, sizeof(msg), "%s扑了过来!",
+                             dr_enemy_name(dr_world_fight_enemy(&s_world,
+                                                                &s.game)));
+                    log_push(msg);
+                    page_goto(PG_COMBAT);
+                    break;
+                }
+                case DR_LOC_EMPTY:      log_push("这里被搜空了"); break;
+                case DR_LOC_NEED_TORCH: log_push("需要火把(工坊:1木1布)"); break;
+                default: break;
+            }
+            s.dirty = true;
             break;
+        }
         case PG_TRADE: {
             if (idx == 8) { page_goto(PG_HOME); break; }
             static const char *goods[DR_TRADE_KIND_COUNT] = {
@@ -1585,6 +1732,19 @@ static void list_action(int idx) {
                 s.save_pending = true;
             } else {
                 log_push("货款不够");
+            }
+            break;
+        }
+        case PG_CRAFT: {
+            if (idx >= s.craft_row_count) { page_goto(PG_HOME); break; }
+            uint8_t c = s.craft_row_map[idx];
+            if (dr_rules_craft(&s.game, c)) {
+                char line[40];
+                snprintf(line, sizeof(line), "造成了 %s", craft_name(c));
+                log_push(line);
+                s.save_pending = true;
+            } else {
+                log_push("材料不够或需要工坊");
             }
             break;
         }
@@ -1612,6 +1772,7 @@ static void handle_ok(void) {
         case PG_RUIN:
         case PG_COMBAT:
         case PG_TRADE:
+        case PG_CRAFT:
         case PG_SETTINGS: list_action(s.focus); break;
         case PG_EVENT: {
             uint16_t count = 0;
@@ -1851,6 +2012,21 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             s.dirty = true;
             return;
         }
+        // 村庄页职业区滚动:窗口 5 行,到边缘且还有职业时先滚窗再移焦
+        if (s.page == PG_VILLAGE && s.village_adj < 0 &&
+            !s.game.in_wilderness) {
+            if (btn == BSP_BTN_UP && s.focus == 3 && s.job_scroll > 0) {
+                s.job_scroll--;
+                s.dirty = true;
+                return;
+            }
+            if (btn == BSP_BTN_DOWN && s.focus == 7 &&
+                s.job_scroll + 5 < DR_JOB_KIND_COUNT) {
+                s.job_scroll++;
+                s.dirty = true;
+                return;
+            }
+        }
         if (btn == BSP_BTN_UP) {
             focus_move(-1);
             s.dirty = true;
@@ -1890,6 +2066,7 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             case PG_BUILD:
             case PG_TRADE:
             case PG_SETTINGS:
+            case PG_CRAFT:
             case PG_MAP:    page_goto(PG_HOME); break;
             case PG_RUIN:   page_goto(PG_MAP);  break;
             default: break;

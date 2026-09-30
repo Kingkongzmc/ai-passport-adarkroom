@@ -435,6 +435,53 @@ static void test_miner_jobs(void) {
     assert(g.res[DR_RES_SULPHUR] == 0);
 }
 
+// ---- 制造(切片三:工坊/武器/护甲/水具/背具) ----
+static void test_craft(void) {
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    // 火把无需工坊:1木+1布
+    g.res[DR_RES_WOOD] = 1;
+    g.res[DR_RES_CLOTH] = 1;
+    assert(!dr_rules_craft(&g, DR_CRAFT_BONE_SPEAR));   // 材料不够
+    assert(dr_rules_craft(&g, DR_CRAFT_TORCH));
+    assert(g.flags & ((uint64_t)1u << DR_FLAG_TORCH));
+
+    // 骨矛需工坊(可见性:无工坊时不可见 → craft false)
+    g.res[DR_RES_WOOD] = 200;
+    g.res[DR_RES_TEETH] = 5;
+    assert(!dr_rules_craft_visible(&g, DR_CRAFT_BONE_SPEAR));
+    assert(!dr_rules_craft(&g, DR_CRAFT_BONE_SPEAR));
+    g.building_lv[DR_BLD_WORKSHOP] = 1;
+    assert(dr_rules_craft_visible(&g, DR_CRAFT_BONE_SPEAR));
+    assert(dr_rules_craft(&g, DR_CRAFT_BONE_SPEAR));
+    assert(g.weapon_lv == 1);
+    assert(g.res[DR_RES_WOOD] == 100 && g.res[DR_RES_TEETH] == 0);
+
+    // 武器取最优:铁剑直接覆盖骨矛
+    g.res[DR_RES_WOOD] = 200;
+    g.res[DR_RES_LEATHER] = 50;
+    g.res[DR_RES_IRON] = 20;
+    assert(dr_rules_craft(&g, DR_CRAFT_IRON_SWORD));
+    assert(g.weapon_lv == 2);
+
+    // 皮甲:护甲1
+    g.res[DR_RES_LEATHER] = 200;
+    g.res[DR_RES_SCALES] = 20;
+    assert(dr_rules_craft(&g, DR_CRAFT_L_ARMOUR));
+    assert(g.armor_lv == 1);
+
+    // 水袋:标记位;重复造被拒
+    g.res[DR_RES_LEATHER] = 50;
+    assert(dr_rules_craft(&g, DR_CRAFT_WATERSKIN));
+    assert(g.flags & ((uint64_t)1u << DR_FLAG_WATERSKIN));
+    g.res[DR_RES_LEATHER] = 50;
+    assert(!dr_rules_craft(&g, DR_CRAFT_WATERSKIN));
+
+    // 工坊造价
+    dr_bld_cost_t c = dr_building_cost(DR_BLD_WORKSHOP, 0);
+    assert(c.wood == 800 && c.leather == 100 && c.scales == 10);
+}
+
 int main(void) {
     test_building_costs();
     test_build_gates();
@@ -450,6 +497,7 @@ int main(void) {
     test_trade();
     test_offline();
     test_miner_jobs();
+    test_craft();
     printf("test_dr_rules: all passed\n");
     return 0;
 }

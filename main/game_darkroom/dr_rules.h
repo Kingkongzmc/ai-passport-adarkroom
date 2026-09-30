@@ -29,6 +29,7 @@ typedef enum {
     DR_BLD_SMOKEHOUSE,  // 熏肉房:max1,600木+50肉;解锁熏肉匠(v3 尾插)
     DR_BLD_STEELWORKS,  // 炼钢厂:max1,1500木+100铁+100煤;解锁炼钢工(v4 尾插)
     DR_BLD_ARMOURY,     // 军械库:max1,3000木+100钢+50硫;解锁军械工
+    DR_BLD_WORKSHOP,    // 工坊:max1,800木+100革+10鳞;解锁制造(切片三尾插)
     DR_BLD_KIND_COUNT,
 } dr_building_t;
 
@@ -88,6 +89,7 @@ typedef enum {
 typedef struct {
     uint32_t wood;              // 0xFFFFFFFF = 不可建(满级/未实装)
     uint32_t fur, meat, iron, coal, steel, sulphur;   // 组件造价(原版口径)
+    uint32_t leather, scales;   // 工坊等后期组件
 } dr_bld_cost_t;
 dr_bld_cost_t dr_building_cost(uint8_t building_id, uint8_t current_lv);
 
@@ -171,6 +173,33 @@ typedef struct {
 uint32_t dr_rules_offline_settle(dr_rules_rt_t *rt, dr_game_t *g,
                                  uint32_t now_ts_s, uint32_t now_ms,
                                  dr_offline_yield_t *y);
+
+// ---- 制造(原版 room.js crafts,§9.7;火把无需工坊,其余需工坊) ----
+typedef enum {
+    DR_CRAFT_TORCH = 0,     // 火把:1木+1布(消耗品,探索洞穴)
+    DR_CRAFT_BONE_SPEAR,    // 骨矛:100木+5牙(武器2)
+    DR_CRAFT_IRON_SWORD,    // 铁剑:200木+50革+20铁(武器4)
+    DR_CRAFT_STEEL_SWORD,   // 钢剑:500木+100革+20钢(武器6)
+    DR_CRAFT_RIFLE,         // 步枪:200木+50钢+50硫(武器5,耗弹)
+    DR_CRAFT_L_ARMOUR,      // 皮甲:200革+20鳞(护甲1,HP+5)
+    DR_CRAFT_I_ARMOUR,      // 铁甲:200革+100铁(护甲2,HP+15)
+    DR_CRAFT_S_ARMOUR,      // 钢甲:200革+100钢(护甲3,HP+35)
+    DR_CRAFT_WATERSKIN,     // 水袋:50革(水+10)
+    DR_CRAFT_CASK,          // 木桶:100革+20铁(水+20)
+    DR_CRAFT_TANK,          // 水箱:100铁+50钢(水+50)
+    DR_CRAFT_RUCKSACK,      // 背囊:200革(背袋+10)
+    DR_CRAFT_WAGON,         // 篷车:500木+100铁(背袋+30)
+    DR_CRAFT_CONVOY,        // 车队:1000木+200铁+100钢(背袋+60)
+    DR_CRAFT_KIND_COUNT,
+} dr_craft_t;
+bool dr_rules_craft(dr_game_t *g, uint8_t craft);        // 制造(含工坊门槛)
+bool dr_rules_craft_owned(const dr_game_t *g, uint8_t craft);
+// 制造可用(可见性):工坊/火把规则 + 材料见过 + 武器护甲按阶可见
+bool dr_rules_craft_visible(const dr_game_t *g, uint8_t craft);
+// 某制造项对某资源的材料数(UI 展示)
+uint32_t dr_rules_craft_need(const dr_game_t *g, uint8_t craft, uint8_t res);
+// 可立即制造:可见 + (未拥有,或火把) + 材料足额(UI 行可选判定)
+bool dr_rules_craft_ready(const dr_game_t *g, uint8_t craft);
 
 // ---- 贸易(原版 TradeGoods:游牧商人只买不卖,以毛/鳞/牙支付) ----
 typedef enum {

@@ -10,7 +10,7 @@
 static const uint32_t DR_COST_MAX = 0xFFFFFFFFu;
 
 dr_bld_cost_t dr_building_cost(uint8_t building_id, uint8_t lv) {
-    dr_bld_cost_t c = {0, 0, 0, 0, 0, 0, 0};
+    dr_bld_cost_t c = {0, 0, 0, 0, 0, 0, 0, 0, 0};
     switch ((dr_building_t)building_id) {
         case DR_BLD_CART:       // max 1
             c.wood = (lv >= 1) ? DR_COST_MAX : 30u;
@@ -45,6 +45,10 @@ dr_bld_cost_t dr_building_cost(uint8_t building_id, uint8_t lv) {
             if (lv >= 1) { c.wood = DR_COST_MAX; break; }
             c.wood = 3000u; c.steel = 100u; c.sulphur = 50u;
             break;
+        case DR_BLD_WORKSHOP:   // max 1:800 木 + 100 革 + 10 鳞
+            if (lv >= 1) { c.wood = DR_COST_MAX; break; }
+            c.wood = 800u; c.leather = 100u; c.scales = 10u;
+            break;
         default:
             c.wood = DR_COST_MAX;  // 未实装槽位(切片三:工坊)
             break;
@@ -75,6 +79,8 @@ bool dr_rules_can_build(const dr_game_t *g, uint8_t building_id) {
     if (cost.coal > 0 && g->res[DR_RES_COAL] == 0) return false;
     if (cost.steel > 0 && g->res[DR_RES_STEEL] == 0) return false;
     if (cost.sulphur > 0 && g->res[DR_RES_SULPHUR] == 0) return false;
+    if (cost.leather > 0 && g->res[DR_RES_LEATHER] == 0) return false;
+    if (cost.scales > 0 && g->res[DR_RES_SCALES] == 0) return false;
     return true;
 }
 
@@ -116,6 +122,8 @@ bool dr_rules_build(dr_game_t *g, uint8_t building_id, uint32_t now_ts) {
     if (g->res[DR_RES_COAL] < cost.coal) return false;
     if (g->res[DR_RES_STEEL] < cost.steel) return false;
     if (g->res[DR_RES_SULPHUR] < cost.sulphur) return false;
+    if (g->res[DR_RES_LEATHER] < cost.leather) return false;
+    if (g->res[DR_RES_SCALES] < cost.scales) return false;
     g->res[DR_RES_WOOD] -= cost.wood;
     g->res[DR_RES_FUR] -= cost.fur;
     g->res[DR_RES_MEAT] -= cost.meat;
@@ -123,6 +131,8 @@ bool dr_rules_build(dr_game_t *g, uint8_t building_id, uint32_t now_ts) {
     g->res[DR_RES_COAL] -= cost.coal;
     g->res[DR_RES_STEEL] -= cost.steel;
     g->res[DR_RES_SULPHUR] -= cost.sulphur;
+    g->res[DR_RES_LEATHER] -= cost.leather;
+    g->res[DR_RES_SCALES] -= cost.scales;
     g->building_lv[building_id] = lv + 1;
     return true;   // 原版建房不加人口,人口只来自流浪者到达
 }
@@ -338,6 +348,136 @@ bool dr_rules_trap_ready(const dr_rules_rt_t *rt, const dr_game_t *g,
                          uint32_t now_ms) {
     return g->building_lv[DR_BLD_TRAP] > 0 &&
            (int32_t)(now_ms - rt->trap_next_ms) >= 0;
+}
+
+// ---- 制造(原版 room.js crafts;一次性,武器/护甲取阶) ----
+typedef struct {
+    uint16_t res[DR_RES_KIND_COUNT];  // 材料数(下标即资源)
+    uint8_t  weapon;                   // 造后 weapon_lv(0=非武器)
+    uint8_t  armor;                    // 造后 armor_lv(0=非护甲)
+    uint16_t flag;                     // 置位标记(0=无)
+    bool     need_workshop;
+} dr_craft_def_t;
+
+static const dr_craft_def_t k_crafts[DR_CRAFT_KIND_COUNT] = {
+    [DR_CRAFT_TORCH]       = { .res = { [DR_RES_WOOD]=1, [DR_RES_CLOTH]=1 },
+                               .flag = DR_FLAG_TORCH, .need_workshop = false },
+    [DR_CRAFT_BONE_SPEAR]  = { .res = { [DR_RES_WOOD]=100, [DR_RES_TEETH]=5 },
+                               .weapon = 1, .need_workshop = true },
+    [DR_CRAFT_IRON_SWORD]  = { .res = { [DR_RES_WOOD]=200, [DR_RES_LEATHER]=50,
+                                        [DR_RES_IRON]=20 },
+                               .weapon = 2, .need_workshop = true },
+    [DR_CRAFT_STEEL_SWORD] = { .res = { [DR_RES_WOOD]=500, [DR_RES_LEATHER]=100,
+                                        [DR_RES_STEEL]=20 },
+                               .weapon = 3, .need_workshop = true },
+    [DR_CRAFT_RIFLE]       = { .res = { [DR_RES_WOOD]=200, [DR_RES_STEEL]=50,
+                                        [DR_RES_SULPHUR]=50 },
+                               .weapon = 4, .need_workshop = true },
+    [DR_CRAFT_L_ARMOUR]    = { .res = { [DR_RES_LEATHER]=200, [DR_RES_SCALES]=20 },
+                               .armor = 1, .need_workshop = true },
+    [DR_CRAFT_I_ARMOUR]    = { .res = { [DR_RES_LEATHER]=200, [DR_RES_IRON]=100 },
+                               .armor = 2, .need_workshop = true },
+    [DR_CRAFT_S_ARMOUR]    = { .res = { [DR_RES_LEATHER]=200, [DR_RES_STEEL]=100 },
+                               .armor = 3, .need_workshop = true },
+    [DR_CRAFT_WATERSKIN]   = { .res = { [DR_RES_LEATHER]=50 },
+                               .flag = DR_FLAG_WATERSKIN, .need_workshop = true },
+    [DR_CRAFT_CASK]        = { .res = { [DR_RES_LEATHER]=100, [DR_RES_IRON]=20 },
+                               .flag = DR_FLAG_CASK, .need_workshop = true },
+    [DR_CRAFT_TANK]        = { .res = { [DR_RES_IRON]=100, [DR_RES_STEEL]=50 },
+                               .flag = DR_FLAG_TANK, .need_workshop = true },
+    [DR_CRAFT_RUCKSACK]    = { .res = { [DR_RES_LEATHER]=200 },
+                               .flag = DR_FLAG_RUCKSACK, .need_workshop = true },
+    [DR_CRAFT_WAGON]       = { .res = { [DR_RES_WOOD]=500, [DR_RES_IRON]=100 },
+                               .flag = DR_FLAG_WAGON, .need_workshop = true },
+    [DR_CRAFT_CONVOY]      = { .res = { [DR_RES_WOOD]=1000, [DR_RES_IRON]=200,
+                                        [DR_RES_STEEL]=100 },
+                               .flag = DR_FLAG_CONVOY, .need_workshop = true },
+};
+
+bool dr_rules_craft_owned(const dr_game_t *g, uint8_t craft) {
+    const dr_craft_def_t *c = &k_crafts[craft];
+    if (c->flag != 0)
+        return (g->flags & ((uint64_t)1u << c->flag)) != 0;
+    if (c->weapon != 0) return g->weapon_lv >= c->weapon;
+    if (c->armor != 0)  return g->armor_lv >= c->armor;
+    return false;   // 火把走 flag
+}
+
+bool dr_rules_craft_visible(const dr_game_t *g, uint8_t craft) {
+    if (craft >= DR_CRAFT_KIND_COUNT) return false;
+    const dr_craft_def_t *c = &k_crafts[craft];
+    if (dr_rules_craft_owned(g, craft)) return true;
+    if (c->need_workshop &&
+        g->building_lv[DR_BLD_WORKSHOP] == 0) return false;
+    // 火把:消耗品,有布即可见
+    // 武器按阶可见:高阶武器需要低阶已造或其核心材料见过
+    switch ((dr_craft_t)craft) {
+        case DR_CRAFT_STEEL_SWORD:
+            if (g->weapon_lv < 2 && g->res[DR_RES_STEEL] == 0) return false;
+            break;
+        case DR_CRAFT_RIFLE:
+            if (g->res[DR_RES_STEEL] == 0) return false;
+            break;
+        case DR_CRAFT_I_ARMOUR:
+            if (g->armor_lv < 1) return g->res[DR_RES_IRON] > 0;
+            break;
+        case DR_CRAFT_S_ARMOUR:
+            if (g->armor_lv < 2) return g->res[DR_RES_STEEL] > 0;
+            break;
+        case DR_CRAFT_CASK:
+            if (!(g->flags & ((uint64_t)1u << DR_FLAG_WATERSKIN))) return false;
+            break;
+        case DR_CRAFT_TANK:
+            if (!(g->flags & ((uint64_t)1u << DR_FLAG_CASK))) return false;
+            break;
+        case DR_CRAFT_WAGON:
+            if (!(g->flags & ((uint64_t)1u << DR_FLAG_RUCKSACK))) return false;
+            break;
+        case DR_CRAFT_CONVOY:
+            if (!(g->flags & ((uint64_t)1u << DR_FLAG_WAGON))) return false;
+            break;
+        default:
+            break;
+    }
+    // 材料见过(原版 craftUnlocked 口径):任一非木主料 >0
+    bool seen = true;
+    for (int i = 0; i < DR_RES_KIND_COUNT; i++) {
+        if (c->res[i] > 0 && i != DR_RES_WOOD && g->res[i] == 0) seen = false;
+    }
+    return seen;
+}
+
+bool dr_rules_craft(dr_game_t *g, uint8_t craft) {
+    if (craft >= DR_CRAFT_KIND_COUNT) return false;
+    if (!dr_rules_craft_visible(g, craft)) return false;
+    if (dr_rules_craft_owned(g, craft) && craft != DR_CRAFT_TORCH) return false;
+    const dr_craft_def_t *c = &k_crafts[craft];
+    if (c->need_workshop && g->building_lv[DR_BLD_WORKSHOP] == 0) return false;
+    for (int i = 0; i < DR_RES_KIND_COUNT; i++)
+        if (g->res[i] < c->res[i]) return false;
+    for (int i = 0; i < DR_RES_KIND_COUNT; i++)
+        g->res[i] -= c->res[i];
+    if (c->weapon > g->weapon_lv) g->weapon_lv = c->weapon;
+    if (c->armor > g->armor_lv)   g->armor_lv = c->armor;
+    if (c->flag != 0)
+        g->flags |= (uint64_t)1u << c->flag;
+    return true;
+}
+
+uint32_t dr_rules_craft_need(const dr_game_t *g, uint8_t craft, uint8_t res) {
+    (void)g;
+    if (craft >= DR_CRAFT_KIND_COUNT || res >= DR_RES_KIND_COUNT) return 0;
+    return k_crafts[craft].res[res];
+}
+
+bool dr_rules_craft_ready(const dr_game_t *g, uint8_t craft) {
+    if (craft >= DR_CRAFT_KIND_COUNT) return false;
+    if (!dr_rules_craft_visible(g, craft)) return false;
+    if (dr_rules_craft_owned(g, craft) && craft != DR_CRAFT_TORCH) return false;
+    const dr_craft_def_t *c = &k_crafts[craft];
+    for (int i = 0; i < DR_RES_KIND_COUNT; i++)
+        if (g->res[i] < c->res[i]) return false;
+    return true;
 }
 
 // ---- 贸易(原版 TradeGoods:只买不卖) ----

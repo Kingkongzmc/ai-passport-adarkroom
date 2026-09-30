@@ -19,6 +19,14 @@ extern "C" {
 #define DR_FLAG_IRON_MINE     4u
 #define DR_FLAG_COAL_MINE     5u
 #define DR_FLAG_SULPHUR_MINE  6u
+// 工坊制造品(一次性,§9.7 原版 crafts)
+#define DR_FLAG_WATERSKIN     7u   // 水袋:水 +10
+#define DR_FLAG_CASK          8u   // 木桶:水 +20
+#define DR_FLAG_TANK          9u   // 水箱:水 +50
+#define DR_FLAG_RUCKSACK     10u   // 背囊:背袋 +10
+#define DR_FLAG_WAGON        11u   // 篷车:背袋 +30
+#define DR_FLAG_CONVOY       12u   // 车队:背袋 +60
+#define DR_FLAG_TORCH        13u   // 火把:探索洞穴用(1木+1布,消耗品)
 
 // ---- 资源(原版 stores;布局红线:只在尾部追加,不得中间插入) ----
 typedef enum {

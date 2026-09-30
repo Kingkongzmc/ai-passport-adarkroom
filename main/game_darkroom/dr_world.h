@@ -28,6 +28,11 @@ typedef enum {
     DR_WT_SULPHUR,      // 硫磺矿(r20)
     DR_WT_OUTPOST,      // 哨站(通往星舰的路上,补水)
     DR_WT_SHIP,         // 坠毁星舰(r28;M5)
+    DR_WT_HOUSE,        // 老屋 ×10(r0-45;药/补给/遭遇)
+    DR_WT_CAVE,         // 潮湿洞穴 ×5(r3-10;需火把)
+    DR_WT_TOWN,         // 废镇 ×10(r10-20)
+    DR_WT_CITY,         // 废墟城市 ×20(r20-45)
+    DR_WT_KIND_COUNT,
 } dr_world_tile_t;
 
 // 世界与远征运行态(不落盘)
@@ -49,6 +54,8 @@ typedef struct {
     uint16_t fight_hp;
     uint16_t fight_round;     // 敌人按 attackDelay 逢倍数回合反击
     uint16_t steps_since_fight;
+    // 地点状态
+    uint8_t  location;        // 当前地点 tile;0=不在地点
 } dr_world_t;
 
 // 世界生成:同一 map_seed 永远生成同一张图。
@@ -74,6 +81,10 @@ typedef enum {
     DR_MOVE_SULPHUR,
     DR_MOVE_SHIP,          // 星舰(M5 占位)
     DR_MOVE_FIGHT,         // 遭遇战触发(进入战斗页)
+    DR_MOVE_HOUSE,         // 踏上老屋(进入地点页)
+    DR_MOVE_CAVE,          // 踏上潮湿洞穴
+    DR_MOVE_TOWN,          // 踏上废镇
+    DR_MOVE_CITY,          // 踏上废墟城市
     DR_MOVE_BLOCKED,       // 出界
 } dr_move_result_t;
 
@@ -142,6 +153,24 @@ dr_fight_result_t dr_world_fight_medicine(dr_world_t *w, dr_game_t *g);  // +20 
 dr_fight_result_t dr_world_fight_flee(dr_world_t *w, dr_game_t *g);
 // 武器伤害(原版武器表;步枪耗 1 子弹)
 uint8_t dr_world_weapon_dmg(uint8_t weapon_lv);
+
+// ---- 地点搜索(设备适配"单次搜索"模型,DESIGN §9.8) ----
+uint16_t dr_world_bag_cap(const dr_game_t *g);   // 背袋容量(基础10+背具,0.1)
+// 当前所在地点(无=不在地点);踏入地标格时设置,离开地点页清零。
+uint8_t dr_world_location(const dr_world_t *w);       // dr_world_tile_t
+const char *dr_world_location_name(uint8_t tile);
+void dr_world_location_leave(dr_world_t *w);
+typedef enum {
+    DR_LOC_NONE = 0,
+    DR_LOC_LOOT,        // 搜到物资(已入包;详情看返回的 loot 摘要)
+    DR_LOC_WATER,       // 找到水(已补水)+可能有物资
+    DR_LOC_FIGHT,       // 触发战斗(fight_* 已就绪,进战斗页)
+    DR_LOC_EMPTY,       // 一无所获
+    DR_LOC_NEED_TORCH,  // 需要火把才能深入
+} dr_loc_result_t;
+// 搜索当前地点一次(洞穴消耗火把标记);loot 文案摘要写入 out(可 NULL)
+dr_loc_result_t dr_world_location_search(dr_world_t *w, dr_game_t *g,
+                                         char *out, size_t outsz);
 
 #ifdef __cplusplus
 }

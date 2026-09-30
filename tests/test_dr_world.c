@@ -233,6 +233,64 @@ static void test_fight(void) {
            r == DR_FIGHT_LOSE || r == DR_FIGHT_ENEMY_MISS);
 }
 
+// ---- 地标生成与地点搜索(切片三) ----
+static void test_locations(void) {
+    dr_world_t w;
+    dr_world_gen(&w, 99);
+    int houses = 0, caves = 0, towns = 0, cities = 0;
+    for (int y = 0; y < DR_WORLD_SIZE; y++)
+        for (int x = 0; x < DR_WORLD_SIZE; x++) {
+            uint8_t t = dr_world_tile(&w, x, y);
+            if (t == DR_WT_HOUSE) houses++;
+            if (t == DR_WT_CAVE)  caves++;
+            if (t == DR_WT_TOWN)  towns++;
+            if (t == DR_WT_CITY)  cities++;
+        }
+    // 期望 10/5/10/20;放置有环带尝试失败的可能,允许下限
+    assert(houses >= 8 && caves >= 4 && towns >= 8 && cities >= 16);
+
+    // 远征中踏上老屋格 → 地点态;搜索:药/补给/遭遇三选一
+    dr_game_t g;
+    dr_game_init(&g, 99, 1000);
+    g.res[DR_RES_FOOD] = 10;
+    assert(dr_world_outfit_add(&w, &g, DR_RES_FOOD, 10));
+    assert(dr_world_embark(&w, &g));
+    int hx = -1, hy = -1;
+    for (int y = 0; y < DR_WORLD_SIZE && hx < 0; y++)
+        for (int x = 0; x < DR_WORLD_SIZE; x++)
+            if (dr_world_tile(&w, x, y) == DR_WT_HOUSE) { hx = x; hy = y; break; }
+    g.hero_x = (uint8_t)hx;
+    g.hero_y = (uint8_t)hy;
+    w.tiles[hy * DR_WORLD_SIZE + hx] = DR_WT_HOUSE;   // 确保不被先前测试改写
+    // 直接设地点态测搜索
+    w.location = DR_WT_HOUSE;
+    char line[64];
+    dr_loc_result_t r = dr_world_location_search(&w, &g, line, sizeof(line));
+    assert(r == DR_LOC_LOOT || r == DR_LOC_WATER || r == DR_LOC_FIGHT);
+    if (r == DR_LOC_FIGHT)
+        assert(dr_world_fight_active(&w));
+    else
+        assert(line[0] != '\0');   // 战利品摘要非空
+    dr_world_location_leave(&w);
+    assert(dr_world_location(&w) == 0);
+
+    // 洞穴:无火把 → NEED_TORCH;有火把 → 消耗并出结果
+    w.location = DR_WT_CAVE;
+    g.flags &= ~(uint64_t)1u << DR_FLAG_TORCH;
+    assert(dr_world_location_search(&w, &g, line, sizeof(line)) ==
+           DR_LOC_NEED_TORCH);
+    g.flags |= (uint64_t)1u << DR_FLAG_TORCH;
+    r = dr_world_location_search(&w, &g, line, sizeof(line));
+    assert(!(g.flags & ((uint64_t)1u << DR_FLAG_TORCH)));   // 火把已耗
+    assert(r == DR_LOC_FIGHT || r == DR_LOC_LOOT);
+
+    // 水袋/背囊:容量生效
+    g.flags |= (uint64_t)1u << DR_FLAG_WATERSKIN;
+    assert(dr_world_water_cap(&g) == 20);
+    g.flags |= (uint64_t)1u << DR_FLAG_RUCKSACK;
+    assert(dr_world_bag_cap(&g) == 200);
+}
+
 int main(void) {
     test_gen();
     test_embark_and_supplies();
@@ -241,6 +299,7 @@ int main(void) {
     test_eat_and_caps();
     test_danger();
     test_fight();
+    test_locations();
     printf("test_dr_world: all passed\n");
     return 0;
 }
