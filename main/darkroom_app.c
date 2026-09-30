@@ -121,7 +121,7 @@ static actrow_t s_acts[ACT_ROWS];
 typedef struct {
     lv_obj_t *row, *mark, *t, *v;
 } listrow_t;
-#define LIST_ROWS 10
+#define LIST_ROWS 12
 static listrow_t s_list[LIST_ROWS];
 static dr_world_t s_world;   // 世界与远征运行态(会话内;种子派生,不落盘)
 // 弹窗层
@@ -813,9 +813,10 @@ static void render_build(void) {
         "解锁熏肉匠:肉变干肉",      // 熏肉房
         "解锁炼钢工:铁+煤炼钢",     // 炼钢厂
         "解锁军械工:钢+硫造子弹",   // 军械库
+        "解锁制造:武器护甲水具",    // 工坊
     };
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(s_hint, 0, 258);
+    lv_obj_set_pos(s_hint, 0, 282);
     if (s.game.temp_lv <= DR_TEMP_COLD)
         lv_label_set_text(s_hint, "屋里太冷,先点火再建造");   // 施工门槛(原版)
     else
@@ -1259,7 +1260,7 @@ static void render_craft(void) {
         { DR_RES_CLOTH, "布" },
     };
     int row = 0;
-    for (int c = 0; c < DR_CRAFT_KIND_COUNT && row < LIST_ROWS - 1; c++) {
+    for (int c = 0; c < DR_CRAFT_KIND_COUNT && row < 9; c++) {  // 屏内上限 9 行
         if (!dr_rules_craft_visible(&s.game, (uint8_t)c)) continue;
         char t[20], v[64];
         snprintf(t, sizeof(t), "%s", craft_name((uint8_t)c));
