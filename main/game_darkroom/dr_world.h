@@ -40,6 +40,15 @@ typedef struct {
     bool    visited_coal;
     bool    visited_sulphur;
     bool    outpost_used;     // 哨站补水每远征一次
+    // 携带与会话内背袋(药/子弹携带量;杂项战利品按资源入包,回家入库)
+    uint16_t carry_medicine;
+    uint16_t carry_bullets;
+    uint32_t loot[DR_RES_KIND_COUNT];
+    // 遭遇战状态
+    uint8_t  fight_enemy;     // dr_enemy_t;KIND_COUNT=无
+    uint16_t fight_hp;
+    uint16_t fight_round;     // 敌人按 attackDelay 逢倍数回合反击
+    uint16_t steps_since_fight;
 } dr_world_t;
 
 // 世界生成:同一 map_seed 永远生成同一张图。
@@ -64,6 +73,7 @@ typedef enum {
     DR_MOVE_COAL,
     DR_MOVE_SULPHUR,
     DR_MOVE_SHIP,          // 星舰(M5 占位)
+    DR_MOVE_FIGHT,         // 遭遇战触发(进入战斗页)
     DR_MOVE_BLOCKED,       // 出界
 } dr_move_result_t;
 
@@ -80,6 +90,58 @@ void dr_world_fail_trip(dr_world_t *w, dr_game_t *g);
 // 上限:水 10(切片三:+水袋10/木桶20/水箱50);HP 10+皮5/铁15/钢35
 uint8_t dr_world_water_cap(const dr_game_t *g);
 uint8_t dr_world_health_cap(const dr_game_t *g);
+
+// 出发携带(Path 承重制,重量单位=0.1):干肉/药 1.0,子弹 0.1,基础容量 10.0
+#define DR_BAG_CAP_TENTHS  100u
+uint16_t dr_world_bag_weight(const dr_game_t *g, const dr_world_t *w);
+// 携带量(药/子弹在会话内;干肉即 g->food)
+uint16_t dr_world_carry_medicine(const dr_world_t *w);
+uint16_t dr_world_carry_bullets(const dr_world_t *w);
+bool dr_world_outfit_add(dr_world_t *w, dr_game_t *g, uint8_t res, int16_t delta);
+
+// ---- 遭遇战(原版 Encounters:距离三档 × 地形) ----
+typedef enum {
+    DR_ENEMY_BEAST = 0,     // 吼兽 d≤10 森林
+    DR_ENEMY_GAUNT,         // 瘦削男子 d≤10 荒地
+    DR_ENEMY_BIRD,          // 怪鸟 d≤10 田野
+    DR_ENEMY_TWOHEAD,       // 双头兽 d≤10 田野
+    DR_ENEMY_SHIVER,        // 颤抖男子 10<d≤20 荒地
+    DR_ENEMY_MANEATER,      // 食人魔 10<d≤20 森林
+    DR_ENEMY_SCAVENGER,     // 拾荒者 10<d≤20 荒地
+    DR_ENEMY_LIZARD,        // 巨蜥 10<d≤20 田野
+    DR_ENEMY_TERROR,        // 狂野恐怖 d>20 森林
+    DR_ENEMY_SOLDIER,       // 士兵 d>20 荒地
+    DR_ENEMY_SNIPER,        // 狙击手 d>20 田野
+    DR_ENEMY_KIND_COUNT,
+} dr_enemy_t;
+
+const char *dr_enemy_name(uint8_t enemy);        // 中文名(UI/日志)
+uint8_t dr_world_fight_enemy(const dr_world_t *w, const dr_game_t *g);
+                                                // 当前遭遇的敌人(无战斗=KIND_COUNT)
+
+// 战斗行为(回合制设备适配):每回合玩家行动一次,敌人按 attackDelay
+// 逢其倍数回合反击(原版为实时冷却,数值同源)。
+typedef enum {
+    DR_FIGHT_NONE = 0,
+    DR_FIGHT_WIN,           // 胜利:战利品已入包(重量超容部分丢弃)
+    DR_FIGHT_LOSE,          // 战败:同死亡口径
+    DR_FIGHT_FLED,          // 逃跑成功(80%)
+    DR_FIGHT_MISS,          // 玩家未命中
+    DR_FIGHT_HIT,           // 命中(敌人剩余血见 fight_hp)
+    DR_FIGHT_ENEMY_HIT,     // 敌人命中
+    DR_FIGHT_ENEMY_MISS,
+    DR_FIGHT_ENEMY_SKIP,    // 敌人本回合未到攻击间隔
+} dr_fight_result_t;
+
+bool     dr_world_fight_active(const dr_world_t *w);
+uint16_t dr_world_fight_hp(const dr_world_t *w);
+uint16_t dr_world_fight_hp_max(const dr_world_t *w);
+dr_fight_result_t dr_world_fight_attack(dr_world_t *w, dr_game_t *g);
+dr_fight_result_t dr_world_fight_eat(dr_world_t *w, dr_game_t *g);      // 干肉 +8
+dr_fight_result_t dr_world_fight_medicine(dr_world_t *w, dr_game_t *g);  // +20 HP
+dr_fight_result_t dr_world_fight_flee(dr_world_t *w, dr_game_t *g);
+// 武器伤害(原版武器表;步枪耗 1 子弹)
+uint8_t dr_world_weapon_dmg(uint8_t weapon_lv);
 
 #ifdef __cplusplus
 }

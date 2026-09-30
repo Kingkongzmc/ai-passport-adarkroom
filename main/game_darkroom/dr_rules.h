@@ -180,6 +180,7 @@ typedef enum {
     DR_TRADE_COAL,        // 煤:200 毛 + 50 牙
     DR_TRADE_STEEL,       // 钢:300 毛 + 50 鳞 + 50 牙
     DR_TRADE_BULLETS,     // 子弹:10 鳞
+    DR_TRADE_MEDICINE,    // 药:50 鳞 + 30 牙(v4 尾插;远征治疗 +20HP)
     DR_TRADE_COMPASS,     // 罗盘:400 毛 + 20 鳞 + 10 牙(限 1;M4 世界坐标)
     DR_TRADE_KIND_COUNT,
 } dr_trade_t;

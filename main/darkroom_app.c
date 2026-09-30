@@ -92,6 +92,7 @@ static struct {
     bool prev_stoke_active;    // 主页添柴冷却条活动态(结束瞬间也要重绘一次)
     uint32_t autosave_ms;      // 周期存档基准(挂机产出也落盘,断电回滚≤1分钟)
     uint32_t embark_cd_ms;     // 出发冷却到期时刻(死亡后 120s,原版口径)
+    int8_t outfit_adj;         // 出发整备:正在调配的物资(-1=无)
     dr_game_t game;
     dr_rules_rt_t rules_rt;
     dr_event_session_t ev_sess;
@@ -932,35 +933,52 @@ static void render_map(void) {
     render_tabs(2, forest_open(), true, -1);
 
     if (!s.game.in_wilderness) {
-        // 出发准备页:水/干肉/HP + 出发行
+        // 出发整备(原版 Path 承重制):干肉/药/子弹在重量预算内自选
         for (int i = 0; i < 4; i++) {
             cell_base(i, i * 49, 24);
             lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
         }
         for (int i = 4; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text_fmt(s_cells[0], "水 %u",
-                              dr_world_water_cap(&s.game));
-        lv_label_set_text_fmt(s_cells[1], "干肉 %lu",
-                              (unsigned long)s.game.res[DR_RES_FOOD]);
-        lv_label_set_text_fmt(s_cells[2], "HP %u",
-                              dr_world_health_cap(&s.game));
-        lv_label_set_text_fmt(s_cells[3], "里 %u", 0);
+        lv_label_set_text_fmt(s_cells[0], "水 %u", dr_world_water_cap(&s.game));
+        lv_label_set_text_fmt(s_cells[1], "重 %u.%u/10",
+                              dr_world_bag_weight(&s.game, &s_world) / 10u,
+                              dr_world_bag_weight(&s.game, &s_world) % 10u);
+        lv_label_set_text_fmt(s_cells[2], "HP %u", dr_world_health_cap(&s.game));
+        lv_label_set_text_fmt(s_cells[3], "行 %u", 0);
         uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
         char v[24];
+        bool adj = (s.outfit_adj >= 0);
+        snprintf(v, sizeof(v), "库%lu 带%u", (unsigned long)s.game.res[DR_RES_FOOD],
+                 s.game.food);
+        set_row(0, 100, "干肉", v, s.focus == 0, false);
+        snprintf(v, sizeof(v), "库%lu 带%u",
+                 (unsigned long)s.game.res[DR_RES_MEDICINE],
+                 dr_world_carry_medicine(&s_world));
+        set_row(1, 124, "药", v, s.focus == 1,
+                s.game.res[DR_RES_MEDICINE] == 0 &&
+                    dr_world_carry_medicine(&s_world) == 0);
+        snprintf(v, sizeof(v), "库%lu 带%u",
+                 (unsigned long)s.game.res[DR_RES_BULLETS],
+                 dr_world_carry_bullets(&s_world));
+        set_row(2, 148, "子弹", v, s.focus == 2,
+                s.game.res[DR_RES_BULLETS] == 0 &&
+                    dr_world_carry_bullets(&s_world) == 0);
         if ((int32_t)(now_ms - s.embark_cd_ms) < 0)
             snprintf(v, sizeof(v), "%lds",
                      (long)((s.embark_cd_ms - now_ms + 999) / 1000));
         else
             snprintf(v, sizeof(v), "就绪");
-        set_row(0, 150, "出发远征", v, s.focus == 0,
-                s.game.res[DR_RES_FOOD] == 0);
-        set_row(1, 176, "返回", "", s.focus == 1, false);
-        for (int i = 2; i < LIST_ROWS; i++) lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
+        set_row(3, 176, "出发远征", v, s.focus == 3, s.game.food == 0);
+        set_row(4, 200, "返回", "", s.focus == 4, false);
+        for (int i = 5; i < LIST_ROWS; i++) lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_pos(s_hint, 0, 210);
-        lv_label_set_text(s_hint,
-            s.game.res[DR_RES_FOOD] == 0 ? "需要干肉才能出发(熏肉房生产)"
-                                         : "带上干肉和水,踏上尘土路");
+        lv_obj_set_pos(s_hint, 0, 228);
+        if (adj)
+            lv_label_set_text(s_hint, "上加1 下减1(长按=5) 确定=下一项");
+        else if (s.game.food == 0)
+            lv_label_set_text(s_hint, "整备干肉后才能出发(库→带)");
+        else
+            lv_label_set_text(s_hint, "背袋承重10:干肉/药各占1,子弹10发占1");
         return;
     }
 
@@ -1042,9 +1060,15 @@ static void render_ruin(void) {
     set_row(3, 230, "离开地点", "", s.focus == 3, false);
 }
 
+static const char *weapon_name(uint8_t lv) {
+    static const char *n[5] = { "拳", "骨矛", "铁剑", "钢剑", "步枪" };
+    return (lv < 5) ? n[lv] : n[0];
+}
+
 static void render_combat(void) {
     render_topbar("战斗");
-    // 敌我名行(198 通栏)+ 血条,间距按 mockup ⑦:名30/条46/名62/条78
+    uint8_t e = dr_world_fight_enemy(&s_world, &s.game);
+    // 敌我名行(198 通栏)+ 血条(名30/条46/名62/条78)
     for (int i = 2; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
     cell_base(0, 0, 30);
     cell_base(1, 0, 62);
@@ -1052,30 +1076,39 @@ static void render_combat(void) {
     lv_obj_set_size(s_cells[1], 198, 15);
     lv_obj_clear_flag(s_cells[0], LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_cells[1], LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(s_cells[0], "巨鼠 66%");
-    lv_label_set_text(s_cells[1], "你(铁剑) 83%");
+    lv_label_set_text_fmt(s_cells[0], "%s HP %u/%u",
+                          dr_enemy_name(e),
+                          (unsigned)dr_world_fight_hp(&s_world),
+                          (unsigned)dr_world_fight_hp_max(&s_world));
+    lv_label_set_text_fmt(s_cells[1], "你(%s) HP %u/%u",
+                          weapon_name(s.game.weapon_lv),
+                          s.game.hero_hp, s.game.hero_hp_max);
+    uint16_t ehp = dr_world_fight_hp(&s_world), ehp_max = dr_world_fight_hp_max(&s_world);
     for (int i = 0; i < 2; i++) {
         lv_obj_clear_flag(s_hp[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_pos(s_hp[i], 0, 46 + i * 32);
-        lv_obj_set_size(s_hpfill[i], i == 0 ? 131 : 164, 8);
+        int w = (i == 0)
+            ? (ehp_max ? (int)(198u * ehp / ehp_max) : 0)
+            : (int)(198u * s.game.hero_hp / (s.game.hero_hp_max ? s.game.hero_hp_max : 1));
+        lv_obj_set_size(s_hpfill[i], w, 8);
     }
-    // 战斗日志:占位 M4,两行灰字
-    lv_obj_set_pos(s_loglines[0], 0, 100);
-    lv_obj_set_pos(s_loglines[1], 0, 100 + lv_font_get_line_height(&dr_font_12));
-    for (int i = 0; i < 2; i++) {
-        lv_obj_clear_flag(s_loglines[i], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_style_text_color(s_loglines[i], lv_color_hex(COL_DIM), 0);
-    }
-    lv_label_set_text(s_loglines[0], "你挥剑命中,造成 6 伤害");
-    lv_label_set_text(s_loglines[1], "巨鼠咬中你,造成 2 伤害");
-    set_act(&s_acts[0], "攻击(铁剑 4-7)", s.focus == 0, 0);
-    set_act(&s_acts[1], "换武器(钢剑 8-12)", s.focus == 1, 0);
-    set_act(&s_acts[2], "补给(食+3)", s.focus == 2, 0);
-    set_act(&s_acts[3], "逃跑(70%)", s.focus == 3, 0);
+    lv_obj_add_flag(s_loglines[0], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_loglines[1], LV_OBJ_FLAG_HIDDEN);
+    char a[24];
+    snprintf(a, sizeof(a), "攻击(%s)", weapon_name(s.game.weapon_lv));
+    set_act(&s_acts[0], a, s.focus == 0, 0);
+    snprintf(a, sizeof(a), "吃干肉(余%u)", s.game.food);
+    set_act(&s_acts[1], a, s.focus == 1, 0);
+    snprintf(a, sizeof(a), "用药(余%u)", dr_world_carry_medicine(&s_world));
+    set_act(&s_acts[2], a, s.focus == 2, 0);
+    set_act(&s_acts[3], "逃跑", s.focus == 3, 0);
     for (int i = 0; i < 4; i++) {
         lv_obj_set_pos(s_acts[i].row, 0, 168 + i * 24);
         lv_obj_clear_flag(s_acts[i].row, LV_OBJ_FLAG_HIDDEN);
     }
+    lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(s_hint, 0, 270);
+    lv_label_set_text(s_hint, "命中80%;敌按攻击间隔反击");
 }
 
 static void render_trade(void) {
@@ -1094,19 +1127,20 @@ static void render_trade(void) {
     bool compass = (s.game.flags & ((uint64_t)1u << DR_FLAG_COMPASS)) != 0;
     char v[28];
     if (post) {
-        snprintf(v, sizeof(v), "%u毛", 150u);  set_row(0, 52, "买 鳞", v, s.focus == 0, !trade_affordable(0));
-        snprintf(v, sizeof(v), "%u毛", 300u);  set_row(1, 75, "买 牙", v, s.focus == 1, !trade_affordable(1));
-        snprintf(v, sizeof(v), "%u毛%u鳞", 150u, 50u); set_row(2, 98, "买 铁", v, s.focus == 2, !trade_affordable(2));
-        snprintf(v, sizeof(v), "%u毛%u牙", 200u, 50u); set_row(3, 121, "买 煤", v, s.focus == 3, !trade_affordable(3));
-        snprintf(v, sizeof(v), "%u毛%u鳞%u牙", 300u, 50u, 50u); set_row(4, 144, "买 钢", v, s.focus == 4, !trade_affordable(4));
-        snprintf(v, sizeof(v), "%u鳞", 10u);   set_row(5, 167, "买 子弹", v, s.focus == 5, !trade_affordable(5));
+        snprintf(v, sizeof(v), "%u毛", 150u);  set_row(0, 46, "买 鳞", v, s.focus == 0, !trade_affordable(0));
+        snprintf(v, sizeof(v), "%u毛", 300u);  set_row(1, 67, "买 牙", v, s.focus == 1, !trade_affordable(1));
+        snprintf(v, sizeof(v), "%u毛%u鳞", 150u, 50u); set_row(2, 88, "买 铁", v, s.focus == 2, !trade_affordable(2));
+        snprintf(v, sizeof(v), "%u毛%u牙", 200u, 50u); set_row(3, 109, "买 煤", v, s.focus == 3, !trade_affordable(3));
+        snprintf(v, sizeof(v), "%u毛%u鳞%u牙", 300u, 50u, 50u); set_row(4, 130, "买 钢", v, s.focus == 4, !trade_affordable(4));
+        snprintf(v, sizeof(v), "%u鳞", 10u);   set_row(5, 151, "买 子弹", v, s.focus == 5, !trade_affordable(5));
+        snprintf(v, sizeof(v), "%u鳞%u牙", 50u, 30u); set_row(6, 172, "买 药", v, s.focus == 6, !trade_affordable(6));
         if (compass) snprintf(v, sizeof(v), "已购");
         else         snprintf(v, sizeof(v), "%u毛%u鳞%u牙", 400u, 20u, 10u);
-        set_row(6, 190, "买 罗盘", v, s.focus == 6, !trade_affordable(6));
-        set_row(7, 213, "返回", "", s.focus == 7, false);
+        set_row(7, 193, "买 罗盘", v, s.focus == 7, !trade_affordable(7));
+        set_row(8, 215, "返回", "", s.focus == 8, false);
     } else {
-        for (int i = 0; i < 7; i++) set_row(i, 52 + i * 23, "—", "需贸易站", false, true);
-        set_row(7, 213, "返回", "", s.focus == 7, false);
+        for (int i = 0; i < 8; i++) set_row(i, 46 + i * 21, "—", "需贸易站", false, true);
+        set_row(8, 215, "返回", "", s.focus == 8, false);
     }
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(s_hint, 0, 238);
@@ -1207,10 +1241,10 @@ static int page_lines(void) {
         case PG_HOME: return home_lines();
         case PG_BUILD: return DR_BLD_KIND_COUNT + 1;
         case PG_VILLAGE: return 8;
-        case PG_MAP: return s.game.in_wilderness ? 5 : 2;
+        case PG_MAP: return 5;   // 整备3行+出发+返回 / 或 东南西北+吃干肉
         case PG_RUIN: return 4;
         case PG_COMBAT: return 4;
-        case PG_TRADE: return 8;
+        case PG_TRADE: return 9;
         case PG_SETTINGS: return 4;
         case PG_EVENT: {
             uint16_t c = 0;
@@ -1248,6 +1282,9 @@ static bool trade_affordable(uint8_t item) {
                                       s.game.res[DR_RES_SCALES] >= 50u &&
                                       s.game.res[DR_RES_TEETH] >= 50u;
         case DR_TRADE_BULLETS:return s.game.res[DR_RES_SCALES] >= 10u;
+        case DR_TRADE_MEDICINE:
+            return s.game.res[DR_RES_SCALES] >= 50u &&
+                   s.game.res[DR_RES_TEETH] >= 30u;
         case DR_TRADE_COMPASS:return s.game.res[DR_RES_FUR] >= 400u &&
                                       s.game.res[DR_RES_SCALES] >= 20u &&
                                       s.game.res[DR_RES_TEETH] >= 10u;
@@ -1269,15 +1306,18 @@ static bool row_enabled(int idx) {
             if (idx == 2) return false;                 // 采集者自动,不可调
             return dr_rules_job_unlocked(&s.game, (uint8_t)village_row_job(idx));
         case PG_TRADE:
-            return idx == 7 || trade_affordable((uint8_t)idx);
+            return idx == 8 || trade_affordable((uint8_t)idx);
         case PG_MAP:
             if (!s.game.in_wilderness) {
-                if (idx == 0) {   // 出发:需干肉 + 冷却已过
-                    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-                    return s.game.res[DR_RES_FOOD] > 0 &&
-                           (int32_t)(now_ms - s.embark_cd_ms) >= 0;
-                }
-                return idx == 1;   // 返回
+                if (idx == 0 || idx == 4) return true;         // 干肉 / 返回
+                if (idx == 1) return s.game.res[DR_RES_MEDICINE] > 0 ||
+                                   dr_world_carry_medicine(&s_world) > 0;
+                if (idx == 2) return s.game.res[DR_RES_BULLETS] > 0 ||
+                                   dr_world_carry_bullets(&s_world) > 0;
+                // idx 3 = 出发:需已带干肉 + 冷却已过
+                uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+                return s.game.food > 0 &&
+                       (int32_t)(now_ms - s.embark_cd_ms) >= 0;
             }
             if (idx == 4) return s.game.food > 0;   // 吃干肉
             return idx < 4;                          // 东南西北
@@ -1299,6 +1339,7 @@ static void page_goto(page_t p) {
     s.page = p;
     s.focus = 0;
     s.village_adj = -1;   // 离开村庄页/任意切页退出人数调节
+    s.outfit_adj = -1;    // 离开整备态
     // 回到小屋页 = 拜访房间(原版 onArrival):陌生人从沉睡中醒来帮忙
     if (p == PG_HOME && dr_rules_builder_visit(&s.game)) {
         log_push("她站在火边:可以帮忙了");
@@ -1401,14 +1442,22 @@ static void list_action(int idx) {
         case PG_MAP: {
             uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
             if (!s.game.in_wilderness) {
-                if (idx == 0) {                       // 出发远征
+                static const uint8_t outfit_res[3] = {
+                    DR_RES_FOOD, DR_RES_MEDICINE, DR_RES_BULLETS
+                };
+                if (idx <= 2) {                     // 进入携带调配
+                    s.outfit_adj = (int8_t)idx;
+                    s.dirty = true;
+                    break;
+                }
+                if (idx == 3) {                     // 出发远征(需已带干肉)
                     if ((int32_t)(now_ms - s.embark_cd_ms) < 0) {
                         log_push("歇一歇再出发");
                     } else if (dr_world_embark(&s_world, &s.game)) {
-                        log_push("带上干肉,踏上尘土路");
+                        log_push("踏上尘土路");
                         s.save_pending = true;
                     } else {
-                        log_push("需要干肉才能出发(熏肉房生产)");
+                        log_push("先整备干肉(库→带)");
                     }
                     break;
                 }
@@ -1423,6 +1472,15 @@ static void list_action(int idx) {
                 dr_move_result_t r =
                     dr_world_move(&s_world, &s.game, dirs[idx][0], dirs[idx][1]);
                 switch (r) {
+                    case DR_MOVE_FIGHT: {
+                        char line[48];
+                        snprintf(line, sizeof(line), "遭遇了%s!",
+                                 dr_enemy_name(dr_world_fight_enemy(&s_world,
+                                                                    &s.game)));
+                        log_push(line);
+                        page_goto(PG_COMBAT);
+                        break;
+                    }
                     case DR_MOVE_WARN_THIRST: log_push("口渴难忍"); break;
                     case DR_MOVE_WARN_HUNGER: log_push("饥饿来袭"); break;
                     case DR_MOVE_DEATH:
@@ -1467,17 +1525,53 @@ static void list_action(int idx) {
             }
             break;
         }
+        case PG_COMBAT: {
+            dr_fight_result_t r;
+            if (idx == 0)            r = dr_world_fight_attack(&s_world, &s.game);
+            else if (idx == 1)       r = dr_world_fight_eat(&s_world, &s.game);
+            else if (idx == 2)       r = dr_world_fight_medicine(&s_world, &s.game);
+            else                     r = dr_world_fight_flee(&s_world, &s.game);
+            const char *en = dr_enemy_name(dr_world_fight_enemy(&s_world, &s.game));
+            (void)en;
+            switch (r) {
+                case DR_FIGHT_WIN:
+                    log_push("击败了它!战利品入包");
+                    s.save_pending = true;
+                    page_goto(PG_MAP);
+                    break;
+                case DR_FIGHT_LOSE:
+                    log_push("你被它打倒了,物资全失");
+                    s.embark_cd_ms = (uint32_t)(esp_timer_get_time() / 1000) +
+                                     120u * 1000u;
+                    s.save_pending = true;
+                    page_goto(PG_MAP);
+                    break;
+                case DR_FIGHT_FLED:
+                    log_push("逃掉了");
+                    page_goto(PG_MAP);
+                    break;
+                case DR_FIGHT_NONE:
+                    if (idx == 1) log_push("没有干肉了");
+                    if (idx == 2) log_push("没有药了");
+                    break;
+                case DR_FIGHT_MISS:       log_push("挥空了"); break;
+                case DR_FIGHT_HIT:        log_push("命中!"); break;
+                case DR_FIGHT_ENEMY_HIT:  log_push("它反击得手"); break;
+                case DR_FIGHT_ENEMY_MISS: log_push("它扑了个空"); break;
+                case DR_FIGHT_ENEMY_SKIP: log_push("它蓄势未发"); break;
+                default: break;
+            }
+            s.dirty = true;
+            break;
+        }
         case PG_RUIN:
             if (idx == 3) page_goto(PG_MAP);
-            else log_push("房间系统 M4 实装");
-            break;
-        case PG_COMBAT:
-            log_push("战斗系统 M4 实装");
+            else log_push("房间系统切片三实装");
             break;
         case PG_TRADE: {
-            if (idx == 7) { page_goto(PG_HOME); break; }
+            if (idx == 8) { page_goto(PG_HOME); break; }
             static const char *goods[DR_TRADE_KIND_COUNT] = {
-                "鳞", "牙", "铁", "煤", "钢", "子弹", "罗盘",
+                "鳞", "牙", "铁", "煤", "钢", "子弹", "药", "罗盘",
             };
             if (idx == DR_TRADE_COMPASS &&
                 (s.game.flags & ((uint64_t)1u << DR_FLAG_COMPASS))) {
@@ -1685,6 +1779,27 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     if (ev == BSP_BTN_PRESS) {
         // 渲染静默期:渲染电流尖峰制造的幽灵按键紧贴渲染出现
         if (now_ms - s.last_render_ms < 60u) return;
+        // 出发整备调配:上/下=±1,确定=完成
+        if (s.page == PG_MAP && s.outfit_adj >= 0) {
+            static const uint8_t outfit_res[3] = {
+                DR_RES_FOOD, DR_RES_MEDICINE, DR_RES_BULLETS
+            };
+            if (btn == BSP_BTN_OK) {
+                s.outfit_adj = -1;
+                s.dirty = true;
+                return;
+            }
+            int16_t d = (btn == BSP_BTN_UP) ? 1 :
+                        (btn == BSP_BTN_DOWN) ? -1 : 0;
+            if (d != 0) {
+                if (!dr_world_outfit_add(&s_world, &s.game,
+                                         outfit_res[s.outfit_adj], d))
+                    log_push(d > 0 ? "背袋满了或库存不足" : "已经没有携带了");
+                s.save_pending = true;
+                s.dirty = true;
+            }
+            return;
+        }
         // 村庄人数调节:上/下=±1,确定=完成退出
         if (s.page == PG_VILLAGE && s.village_adj >= 0) {
             if (btn == BSP_BTN_OK) {
@@ -1809,6 +1924,7 @@ void darkroom_app_enter(void) {
     memset(&s, 0, sizeof(s));
     s.nav_focus = -1;   // -1 = 焦点在动作区
     s.village_adj = -1; // -1 = 村庄页未进入人数调节
+    s.outfit_adj = -1;  // -1 = 未在整备调配
     s.boot_ms = (uint32_t)(esp_timer_get_time() / 1000);
 
     dr_port_storage_init();

@@ -351,6 +351,7 @@ static const dr_trade_cost_t k_trade_cost[DR_TRADE_KIND_COUNT] = {
     [DR_TRADE_COAL]   = { 200, 0, 50 },
     [DR_TRADE_STEEL]  = { 300, 50, 50 },
     [DR_TRADE_BULLETS]= { 0, 10, 0 },
+    [DR_TRADE_MEDICINE]= { 0, 50, 30 },
     [DR_TRADE_COMPASS]= { 400, 20, 10 },
 };
 
@@ -373,6 +374,7 @@ bool dr_rules_trade_buy(dr_game_t *g, uint8_t item) {
         case DR_TRADE_COAL:   g->res[DR_RES_COAL] += 1; break;
         case DR_TRADE_STEEL:  g->res[DR_RES_STEEL] += 1; break;
         case DR_TRADE_BULLETS:g->res[DR_RES_BULLETS] += 1; break;
+        case DR_TRADE_MEDICINE: g->res[DR_RES_MEDICINE] += 1; break;
         case DR_TRADE_COMPASS:
             g->flags |= (uint64_t)1u << DR_FLAG_COMPASS;
             break;
@@ -386,6 +388,7 @@ bool dr_rules_trade_buy(dr_game_t *g, uint8_t item) {
         case DR_TRADE_COAL:   g->res_total[DR_RES_COAL] += 1; break;
         case DR_TRADE_STEEL:  g->res_total[DR_RES_STEEL] += 1; break;
         case DR_TRADE_BULLETS:g->res_total[DR_RES_BULLETS] += 1; break;
+        case DR_TRADE_MEDICINE: g->res_total[DR_RES_MEDICINE] += 1; break;
         default: break;
     }
     return true;

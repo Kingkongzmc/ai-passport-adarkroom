@@ -15,6 +15,18 @@ static uint16_t manhattan(int x, int y) {
     return (uint16_t)((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy));
 }
 
+// 测试辅助:移动并自动清掉途中的遭遇战(位移已发生,战斗只影响断言口径)
+static dr_move_result_t move_ok_or_fight(dr_world_t *w, dr_game_t *g,
+                                         int dx, int dy) {
+    dr_move_result_t r = dr_world_move(w, g, dx, dy);
+    if (r == DR_MOVE_FIGHT) {
+        while (dr_world_fight_active(w))
+            (void)dr_world_fight_attack(w, g);
+        return DR_MOVE_OK;
+    }
+    return r;
+}
+
 static void test_gen(void) {
     dr_world_t a, b;
     dr_world_gen(&a, 1234);
@@ -59,6 +71,7 @@ static void test_embark_and_supplies(void) {
 
     assert(!dr_world_embark(&w, &g));       // 无干肉不可出发
     g.res[DR_RES_FOOD] = 25;
+    assert(dr_world_outfit_add(&w, &g, DR_RES_FOOD, 10));   // 整备:带 10 口
     assert(dr_world_embark(&w, &g));
     assert(g.in_wilderness == 1);
     assert(g.res[DR_RES_FOOD] == 15);       // 带走 10(基础负重)
@@ -68,13 +81,13 @@ static void test_embark_and_supplies(void) {
     assert(dr_world_seen(&w, 30, 30));
 
     // 移动 2 步:水 -2(每步 1),干肉 -1(每 2 步 1)
-    assert(dr_world_move(&w, &g, 1, 0) == DR_MOVE_OK);
+    assert(move_ok_or_fight(&w, &g, 1, 0) == DR_MOVE_OK);
     assert(g.water == 9);
-    assert(dr_world_move(&w, &g, 0, 1) == DR_MOVE_OK);
+    assert(move_ok_or_fight(&w, &g, 0, 1) == DR_MOVE_OK);
     assert(g.water == 8 && g.food == 9);
 
     // 走回村庄格 = 回家:4 步共吃 2 口干肉,余 8 口入库
-    assert(dr_world_move(&w, &g,  0, -1) == DR_MOVE_OK);
+    assert(move_ok_or_fight(&w, &g,  0, -1) == DR_MOVE_OK);
     dr_move_result_t r = dr_world_move(&w, &g, -1, 0);
     assert(r == DR_MOVE_HOME);
     assert(g.in_wilderness == 0);
@@ -88,6 +101,7 @@ static void test_thirst_death(void) {
     dr_game_t g;
     dr_game_init(&g, 7, 1000);
     g.res[DR_RES_FOOD] = 10;
+    assert(dr_world_outfit_add(&w, &g, DR_RES_FOOD, 10));
     assert(dr_world_embark(&w, &g));
     // 村庄 3×3 恒为森林(无地标干扰):向北走测断供语义
     g.water = 1;
@@ -104,6 +118,7 @@ static void test_outpost_and_mines(void) {
     dr_game_t g;
     dr_game_init(&g, 99, 1000);
     g.res[DR_RES_FOOD] = 30;
+    assert(dr_world_outfit_add(&w, &g, DR_RES_FOOD, 10));
     assert(dr_world_embark(&w, &g));
 
     // 找哨站,把主角放到它旁边,直接踏上
@@ -118,8 +133,8 @@ static void test_outpost_and_mines(void) {
     assert(dr_world_move(&w, &g, 1, 0) == DR_MOVE_OUTPOST);
     assert(g.water == dr_world_water_cap(&g));   // 补满
     g.water = 2;
-    assert(dr_world_move(&w, &g, -1, 0) == DR_MOVE_OK);
-    assert(dr_world_move(&w, &g, 1, 0) == DR_MOVE_OK);   // 二访不补(仅移动耗水)
+    assert(move_ok_or_fight(&w, &g, -1, 0) == DR_MOVE_OK);
+    assert(move_ok_or_fight(&w, &g, 1, 0) == DR_MOVE_OK);   // 二访不补(仅移动耗水)
     assert(g.water == 0);
 
     // 铁矿:踏上标记 visited;回家后 flags 提交,矿工职业解锁
@@ -145,6 +160,7 @@ static void test_eat_and_caps(void) {
     dr_game_t g;
     dr_game_init(&g, 5, 1000);
     g.res[DR_RES_FOOD] = 5;
+    assert(dr_world_outfit_add(&w, &g, DR_RES_FOOD, 5));
     assert(dr_world_embark(&w, &g));
     g.armor_lv = 2;                        // 铁甲:HP 上限 10+15=25
     g.hero_hp = 3;
@@ -175,6 +191,48 @@ static void test_danger(void) {
     assert(!dr_world_danger(&g));
 }
 
+static void test_fight(void) {
+    dr_world_t w;
+    dr_world_gen(&w, 7);
+    dr_game_t g;
+    dr_game_init(&g, 7, 1000);
+    g.res[DR_RES_FOOD] = 10;
+    assert(dr_world_outfit_add(&w, &g, DR_RES_FOOD, 10));
+    assert(dr_world_embark(&w, &g));
+    g.weapon_lv = 2;                       // 铁剑 4 伤
+
+    // 手工开局一场吼兽战斗(5 HP):铁剑两刀内结束,战利品入包
+    w.fight_enemy = DR_ENEMY_BEAST;
+    w.fight_hp = 5;
+    w.fight_round = 0;
+    int guard = 0;
+    dr_fight_result_t r = DR_FIGHT_NONE;
+    while (dr_world_fight_active(&w) && guard++ < 50)
+        r = dr_world_fight_attack(&w, &g);
+    assert(!dr_world_fight_active(&w));
+    assert(r == DR_FIGHT_WIN);
+    assert(dr_world_bag_weight(&g, &w) > 0);   // 吼兽必掉毛/肉
+    assert(g.in_wilderness);                   // 行程未断
+
+    // 用药:+20 但钳到上限(无甲 10)
+    w.fight_enemy = DR_ENEMY_BEAST;
+    w.fight_hp = 5;
+    w.fight_round = 0;
+    g.hero_hp = 2;
+    w.carry_medicine = 1;
+    (void)dr_world_fight_medicine(&w, &g);
+    assert(w.carry_medicine == 0);              // 药已用
+    assert(g.hero_hp == 10 || g.hero_hp == 9);  // 满血(钳上限),或被反击 1 点
+
+    // 逃跑:结束战斗或被追击(确定性种子下的任意合法结果)
+    w.fight_enemy = DR_ENEMY_BEAST;
+    w.fight_hp = 5;
+    w.fight_round = 0;
+    r = dr_world_fight_flee(&w, &g);
+    assert(r == DR_FIGHT_FLED || r == DR_FIGHT_ENEMY_HIT ||
+           r == DR_FIGHT_LOSE || r == DR_FIGHT_ENEMY_MISS);
+}
+
 int main(void) {
     test_gen();
     test_embark_and_supplies();
@@ -182,6 +240,7 @@ int main(void) {
     test_outpost_and_mines();
     test_eat_and_caps();
     test_danger();
+    test_fight();
     printf("test_dr_world: all passed\n");
     return 0;
 }
