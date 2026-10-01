@@ -2125,11 +2125,12 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             s.dirty = true;
             return;
         }
-        // 村庄页职业区滚动:窗口 5 行,到边缘且还有职业时先滚窗再移焦。
-        // 条件放宽到"末行或返回行":锁定行被光标跳过时也必须能滚到后面的职业
+        // 村庄页职业区滚动:窗口 5 行。上/下滚条件按"区域"而非精确行号——
+        // 职业行可能全部锁定(光标被跳过,永远落不到窗口顶/末行),
+        // 焦点在顶部区(≤3)按上=上翻,在底部区(≥7)按下=下翻,保证双向可达
         if (s.page == PG_VILLAGE && s.village_adj < 0 &&
             !s.game.in_wilderness) {
-            if (btn == BSP_BTN_UP && s.focus == 3 && s.job_scroll > 0) {
+            if (btn == BSP_BTN_UP && s.job_scroll > 0 && s.focus <= 3) {
                 s.job_scroll--;
                 s.dirty = true;
                 return;
@@ -2141,10 +2142,11 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                 return;
             }
         }
-        // 制造页滚动:窗口 8 行,末行或返回行且下面还有项时先滚窗
-        // (已有/不可造行会被光标跳过,必须仍可滚到车队等后段项)
+        // 制造页滚动:窗口 8 行,同村庄按区域滚动(已有/不可造行被光标跳过时
+        // 仍可双向滚动:顶部区(≤1)或返回行按上=上翻,末行/返回行按下=下翻)
         if (s.page == PG_CRAFT) {
-            if (btn == BSP_BTN_UP && s.focus == 0 && s.craft_scroll > 0) {
+            if (btn == BSP_BTN_UP && s.craft_scroll > 0 &&
+                (s.focus <= 1 || s.focus >= s.craft_row_count)) {
                 s.craft_scroll--;
                 s.dirty = true;
                 return;
