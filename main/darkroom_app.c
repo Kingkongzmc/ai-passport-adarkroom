@@ -2032,14 +2032,19 @@ static void tick(lv_timer_t *t) {
 // ===================================================================
 // 按键
 // ===================================================================
-// tab 启用表:小屋/≡ 常开;村庄 = 森林剧情解锁;荒野 M4 未实装前恒锁
+// tab 启用表:小屋/≡ 常开;村庄 = 森林剧情解锁;荒野 = 罗盘(原版
+// room.js updateStoresView: 买到罗盘即 Path.openPath,I27——远征系统
+// 已实装,解锁节奏与原版一致)
 static bool forest_open(void) {
     return (s.game.flags & ((uint64_t)1u << DR_FLAG_FOREST)) != 0;
+}
+static bool compass_held(void) {
+    return (s.game.flags & ((uint64_t)1u << DR_FLAG_COMPASS)) != 0;
 }
 static bool nav_tab_enabled(int i) {
     switch (i) {
         case 1: return forest_open();
-        case 2: return false;   // M4 未拆门:与 OK 拦截一致,页签恒锁(不再假可用,I15)
+        case 2: return compass_held();
         default: return true;
     }
 }
@@ -2112,7 +2117,9 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                     case 1: if (forest_open()) page_goto(PG_VILLAGE);
                             else { log_push("森林尚未开启"); go = false; }
                             break;
-                    case 2: log_push("荒野尚未解锁"); go = false; break;   // M4 解锁
+                    case 2: if (compass_held()) page_goto(PG_MAP);   // 罗盘开荒野(I27)
+                            else { log_push("荒野尚未解锁"); go = false; }
+                            break;
                     case 3: page_goto(PG_SETTINGS); break;
                 }
                 if (go) { s.nav_focus = -1; s.focus = 0; }
