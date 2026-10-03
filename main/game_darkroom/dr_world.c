@@ -148,14 +148,14 @@ uint8_t dr_world_water_cap(const dr_game_t *g) {
     return cap;
 }
 
-// 背袋容量(原版 Path.getCapacity:基础10 +背囊10 +篷车30 +车队60;单位0.1)
+// 背袋容量(原版 Path.getCapacity:else-if 取最高档,不叠加;单位 0.1。
+// 2026-10-04 原版对账修正:此前误为三件叠加,见 UI_FIX_PLAN I26)
 uint16_t dr_world_bag_cap(const dr_game_t *g) {
-    uint16_t cap = DR_BAG_CAP_TENTHS;
     uint64_t f = g->flags;
-    if (f & ((uint64_t)1u << DR_FLAG_RUCKSACK)) cap += 100;
-    if (f & ((uint64_t)1u << DR_FLAG_WAGON))    cap += 300;
-    if (f & ((uint64_t)1u << DR_FLAG_CONVOY))   cap += 600;
-    return cap;
+    if (f & ((uint64_t)1u << DR_FLAG_CONVOY))   return DR_BAG_CAP_TENTHS + 600;
+    if (f & ((uint64_t)1u << DR_FLAG_WAGON))    return DR_BAG_CAP_TENTHS + 300;
+    if (f & ((uint64_t)1u << DR_FLAG_RUCKSACK)) return DR_BAG_CAP_TENTHS + 100;
+    return DR_BAG_CAP_TENTHS;
 }
 
 uint8_t dr_world_health_cap(const dr_game_t *g) {

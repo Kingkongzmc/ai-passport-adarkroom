@@ -289,6 +289,11 @@ static void test_locations(void) {
     assert(dr_world_water_cap(&g) == 20);
     g.flags |= (uint64_t)1u << DR_FLAG_RUCKSACK;
     assert(dr_world_bag_cap(&g) == 200);
+    // 原版 else-if 取最高档,不叠加(path.js getCapacity, I26)
+    g.flags |= (uint64_t)1u << DR_FLAG_WAGON;
+    assert(dr_world_bag_cap(&g) == 400);
+    g.flags |= (uint64_t)1u << DR_FLAG_CONVOY;
+    assert(dr_world_bag_cap(&g) == 700);
 }
 
 int main(void) {
