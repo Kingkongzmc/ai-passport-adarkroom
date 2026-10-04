@@ -791,6 +791,8 @@ static uint32_t bld_comp_cost(uint8_t res, const dr_bld_cost_t *c) {
     switch (res) {
         case DR_RES_FUR:      return c->fur;
         case DR_RES_MEAT:     return c->meat;
+        case DR_RES_LEATHER:  return c->leather;   // I29:漏这两个分支时
+        case DR_RES_SCALES:   return c->scales;    // 工坊全价只显"800木"、缺口只剩光杆"缺"
         case DR_RES_IRON:     return c->iron;
         case DR_RES_COAL:     return c->coal;
         case DR_RES_STEEL:    return c->steel;
