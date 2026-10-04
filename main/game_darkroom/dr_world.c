@@ -326,9 +326,14 @@ uint8_t dr_world_weapon_dmg(uint8_t weapon_lv) {
 }
 
 // ---- 背袋承重(原版 Path.Weight;单位 0.1) ----
+// 武器随行计重(原版 path.js:拳 0/骨矛 2/铁剑 3/钢剑·步枪 5;护甲为
+// 装备位不计重。2026-10-04 §3.7 补齐,此前武器零重量为漏实现)
+static const uint16_t k_weapon_weight[5] = { 0, 20, 30, 50, 50 };
+
 uint16_t dr_world_bag_weight(const dr_game_t *g, const dr_world_t *w) {
-    uint64_t weight = (uint64_t)g->food * 10u + (uint64_t)w->carry_medicine * 10u +
-                      (uint64_t)w->carry_bullets;
+    uint64_t weight = (g->weapon_lv < 5) ? k_weapon_weight[g->weapon_lv] : 0u;
+    weight += (uint64_t)g->food * 10u + (uint64_t)w->carry_medicine * 10u +
+              (uint64_t)w->carry_bullets;
     for (int i = 0; i < DR_RES_KIND_COUNT; i++) weight += (uint64_t)w->loot[i] * 10u;
     return (uint16_t)(weight > 0xFFFFu ? 0xFFFFu : weight);
 }

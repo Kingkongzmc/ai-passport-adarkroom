@@ -176,6 +176,34 @@ static void test_eat_and_caps(void) {
     assert(dr_world_health_cap(&g) == 45); // 钢甲 +35
 }
 
+static void test_weapon_weight(void) {
+    dr_world_t w;
+    dr_world_gen(&w, 5);
+    dr_game_t g;
+    dr_game_init(&g, 5, 1000);
+
+    // 拳不计重:基础背袋(承 10.0)恰装 10 口干肉
+    g.res[DR_RES_FOOD] = 20;
+    assert(dr_world_outfit_add(&w, &g, DR_RES_FOOD, 10));
+    assert(!dr_world_outfit_add(&w, &g, DR_RES_FOOD, 1));
+    assert(dr_world_bag_weight(&g, &w) == 100);
+
+    // 铁剑 3.0 随行计重(原版 path.js,§3.7):同容量只装得下 7 口
+    g.weapon_lv = 2;
+    assert(dr_world_bag_weight(&g, &w) == 130);
+    g.food = 0; g.res[DR_RES_FOOD] = 20;
+    assert(dr_world_outfit_add(&w, &g, DR_RES_FOOD, 7));
+    assert(!dr_world_outfit_add(&w, &g, DR_RES_FOOD, 1));
+
+    // 骨矛 2.0 → 8 口;步枪 5.0 → 5 口
+    g.weapon_lv = 1; g.food = 0;
+    assert(dr_world_outfit_add(&w, &g, DR_RES_FOOD, 8));
+    assert(!dr_world_outfit_add(&w, &g, DR_RES_FOOD, 1));
+    g.weapon_lv = 4; g.food = 0;
+    assert(dr_world_outfit_add(&w, &g, DR_RES_FOOD, 5));
+    assert(!dr_world_outfit_add(&w, &g, DR_RES_FOOD, 1));
+}
+
 static void test_danger(void) {
     dr_game_t g;
     dr_game_init(&g, 5, 1000);
@@ -302,6 +330,7 @@ int main(void) {
     test_thirst_death();
     test_outpost_and_mines();
     test_eat_and_caps();
+    test_weapon_weight();
     test_danger();
     test_fight();
     test_locations();
