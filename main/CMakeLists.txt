@@ -13,7 +13,6 @@ idf_component_register(
          "game_darkroom/dr_text.c"
          "game_darkroom/dr_util.c"
          "../assets/fonts/dr_font_12.c"
-         "../assets/fonts/dr_font_16.c"
          "../assets/fonts/dr_font_24.c"
     INCLUDE_DIRS "." "game_darkroom"
     REQUIRES bsp esp_timer esp_hw_support nvs_flash

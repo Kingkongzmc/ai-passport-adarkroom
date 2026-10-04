@@ -40,7 +40,6 @@
 #include "freertos/task.h"
 
 LV_FONT_DECLARE(dr_font_12);
-LV_FONT_DECLARE(dr_font_16);
 LV_FONT_DECLARE(dr_font_24);
 
 // ---- 配色(与 mockup 一致) ----
@@ -246,12 +245,11 @@ static lv_obj_t *label_new(lv_obj_t *parent, const lv_font_t *font,
 // 焦点样式 = 金色文字 + 行首固定宽度箭头列(独立 label,">"/空)。
 // 前缀不在正文里:比例字体下 "> " 与两空格不等宽,会导致正文横移。
 
-// 箭头列宽(f12 取 10,f16 取 12),正文 x 统一 = 行 x + 箭头列宽。
+// 箭头列宽(全应用统一 f12,箭头列取 10),正文 x 统一 = 行 x + 箭头列宽。
 #define ARROW_W12 10
-#define ARROW_W16 12
 
 // 手工折行:按显示宽度断行(ASCII 半格、其余整格),插入 '\n'。
-// 弹窗正文 f16 在 176px 内每行 line_units 格;配合 LONG_DOT 使用,
+// 弹窗正文 f12 在 176px 内每行 line_units 格;配合 LONG_DOT 使用,
 // 不经 LVGL 的 WRAP 路径(见文件头硬性规则)。
 static void wrap_cjk(char *out, size_t outsz, const char *src, int line_units) {
     size_t o = 0;
@@ -280,8 +278,8 @@ static void wrap_cjk(char *out, size_t outsz, const char *src, int line_units) {
 
 static void set_dbody(const char *text) {
     static char wrapped[256];
-    // 176px / 16px = 11 个整格字;单位为半角格(汉字占 2),故传 22
-    wrap_cjk(wrapped, sizeof(wrapped), text, 22);
+    // 176px / 12px = 14 个整格字;单位为半角格(汉字占 2),故传 28
+    wrap_cjk(wrapped, sizeof(wrapped), text, 28);
     lv_label_set_text(s_dbody, wrapped);
 }
 
@@ -315,8 +313,8 @@ static void build_ui(void) {
     lv_obj_clear_flag(s_content, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scrollbar_mode(s_content, LV_SCROLLBAR_MODE_OFF);
 
-    // 顶栏:标题(0,0,110,20 f16) + 电池(150,2,48,15 f12 右对齐)
-    s_topbar = label_new(s_content, &dr_font_16, lv_color_hex(COL_GOLD), 0, 0, 110, 20);
+    // 顶栏:标题(0,0,110,20 f12) + 电池(150,2,48,15 f12 右对齐)
+    s_topbar = label_new(s_content, &dr_font_12, lv_color_hex(COL_GOLD), 0, 0, 110, 20);
     lv_label_set_text(s_topbar, "小黑屋");
     s_batt = label_new(s_content, &dr_font_12, lv_color_hex(COL_DIM), 150, 2, 48, 15);
     lv_obj_set_style_text_align(s_batt, LV_TEXT_ALIGN_RIGHT, 0);
@@ -390,10 +388,10 @@ static void build_ui(void) {
         lv_obj_set_style_border_width(a->fill, 0, 0);
         lv_obj_set_style_pad_all(a->fill, 0, 0);
         lv_obj_clear_flag(a->fill, LV_OBJ_FLAG_SCROLLABLE);
-        a->arrow = label_new(a->row, &dr_font_16, lv_color_hex(COL_GOLD),
-                             2, 1, ARROW_W16, 20);
-        a->lbl = label_new(a->row, &dr_font_16, lv_color_hex(COL_TEXT),
-                           2 + ARROW_W16, 1, 186 - ARROW_W16 - 4, 20);
+        a->arrow = label_new(a->row, &dr_font_12, lv_color_hex(COL_GOLD),
+                             2, 1, ARROW_W12, 20);
+        a->lbl = label_new(a->row, &dr_font_12, lv_color_hex(COL_TEXT),
+                           2 + ARROW_W12, 1, 186 - ARROW_W12 - 4, 20);
     }
 
     // 列表行 9 行(y 由页面渲染时设定)
@@ -438,7 +436,7 @@ static void build_ui(void) {
 
     s_dtitle = label_new(s_dpanel, &dr_font_24, lv_color_hex(COL_GOLD), 0, 0, 176, 30);
     lv_obj_add_flag(s_dtitle, LV_OBJ_FLAG_HIDDEN);
-    s_dbody = label_new(s_dpanel, &dr_font_16, lv_color_hex(COL_TEXT), 0, 0, 176, 100);
+    s_dbody = label_new(s_dpanel, &dr_font_12, lv_color_hex(COL_TEXT), 0, 0, 176, 100);
 
     // 弹窗选项行 4 行 172 宽(页面渲染时定位)
     for (int i = 0; i < 4; i++) {
@@ -458,10 +456,10 @@ static void build_ui(void) {
         lv_obj_set_style_border_width(a->fill, 0, 0);
         lv_obj_set_style_pad_all(a->fill, 0, 0);
         lv_obj_clear_flag(a->fill, LV_OBJ_FLAG_SCROLLABLE);
-        a->arrow = label_new(a->row, &dr_font_16, lv_color_hex(COL_GOLD),
-                             2, 1, ARROW_W16, 20);
-        a->lbl = label_new(a->row, &dr_font_16, lv_color_hex(COL_TEXT),
-                           2 + ARROW_W16, 1, 160 - ARROW_W16 - 4, 20);
+        a->arrow = label_new(a->row, &dr_font_12, lv_color_hex(COL_GOLD),
+                             2, 1, ARROW_W12, 20);
+        a->lbl = label_new(a->row, &dr_font_12, lv_color_hex(COL_TEXT),
+                           2 + ARROW_W12, 1, 160 - ARROW_W12 - 4, 20);
     }
 
     // 标题页三件套(独立对象;组块中心 ~139 垂直居中)
@@ -480,7 +478,7 @@ static void build_ui(void) {
     lv_obj_set_style_border_width(s_t_ok, 1, 0);
     lv_obj_set_style_pad_all(s_t_ok, 0, 0);
     lv_obj_clear_flag(s_t_ok, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_t *tok = label_new(s_t_ok, &dr_font_16, lv_color_hex(COL_GOLD), 0, 1, 120, 20);
+    lv_obj_t *tok = label_new(s_t_ok, &dr_font_12, lv_color_hex(COL_GOLD), 0, 1, 120, 20);
     lv_obj_set_style_text_align(tok, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(tok, "OK键开始");
 
