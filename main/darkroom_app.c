@@ -815,9 +815,10 @@ static void render_build(void) {
     // 列表 8 建筑 + 返回,行距 23 从 52 起
     for (int i = 0; i < DR_BLD_KIND_COUNT; i++) {
         static const struct { uint8_t res; const char *label; } k_comps[] = {
-            { DR_RES_FUR, "毛" },   { DR_RES_MEAT, "肉" },
-            { DR_RES_IRON, "铁" },  { DR_RES_COAL, "煤" },
-            { DR_RES_STEEL, "钢" }, { DR_RES_SULPHUR, "硫" },
+            { DR_RES_FUR, "毛" },     { DR_RES_MEAT, "肉" },
+            { DR_RES_LEATHER, "革" }, { DR_RES_SCALES, "鳞" },
+            { DR_RES_IRON, "铁" },    { DR_RES_COAL, "煤" },
+            { DR_RES_STEEL, "钢" },   { DR_RES_SULPHUR, "硫" },
         };
         uint8_t lv = s.game.building_lv[i];
         bool can = dr_rules_can_build(&s.game, i);
@@ -829,7 +830,7 @@ static void render_build(void) {
             snprintf(v, sizeof(v), "上限");            // 满级:不再显示天文缺口
         } else if (can && build_affordable((uint8_t)i) && warm) {
             int n = snprintf(v, sizeof(v), "%lu木", (unsigned long)c.wood);
-            for (int k = 0; k < 6 && n > 0 && n < (int)sizeof(v); k++) {
+            for (int k = 0; k < 8 && n > 0 && n < (int)sizeof(v); k++) {
                 uint32_t cv = bld_comp_cost(k_comps[k].res, &c);
                 if (cv) n += snprintf(v + n, sizeof(v) - n, "%lu%s",
                                       (unsigned long)cv, k_comps[k].label);
@@ -839,10 +840,11 @@ static void render_build(void) {
             int n = 0;
             uint32_t dw = (c.wood > s.game.res[DR_RES_WOOD])
                               ? c.wood - s.game.res[DR_RES_WOOD] : 0;
-            if (dw || c.fur || c.meat || c.iron || c.coal || c.steel || c.sulphur)
+            if (dw || c.fur || c.meat || c.iron || c.coal || c.steel ||
+                c.sulphur || c.leather || c.scales)
                 n = snprintf(v, sizeof(v), "缺");
             if (dw) n += snprintf(v + n, sizeof(v) - n, "%lu木", (unsigned long)dw);
-            for (int k = 0; k < 6 && n > 0 && n < (int)sizeof(v); k++) {
+            for (int k = 0; k < 8 && n > 0 && n < (int)sizeof(v); k++) {
                 uint32_t cv = bld_comp_cost(k_comps[k].res, &c);
                 if (!cv) continue;
                 uint32_t have = s.game.res[k_comps[k].res];
@@ -1383,8 +1385,22 @@ static void render_craft(void) {
         char t[20], v[64];
         snprintf(t, sizeof(t), "%s", craft_name(c));
         bool owned = dr_rules_craft_owned(&s.game, c);
+        bool can = dr_rules_craft_ready(&s.game, c);
         if (owned && c != DR_CRAFT_TORCH) {
             snprintf(v, sizeof(v), "已有");
+        } else if (!can) {
+            // 材料不足:直接展示缺口(与建造页同款约定),不必回房翻日志(I29)
+            int n = snprintf(v, sizeof(v), "缺");
+            for (int k = 0; k < 7 && n > 0 && n < (int)sizeof(v); k++) {
+                uint32_t need = dr_rules_craft_need(&s.game, c,
+                                                    comps[k].res);
+                if (!need) continue;
+                uint32_t have = s.game.res[comps[k].res];
+                if (need <= have) continue;
+                n += snprintf(v + n, sizeof(v) - n, "%lu%s",
+                              (unsigned long)(need - have), comps[k].label);
+            }
+            if (n <= 1) snprintf(v, sizeof(v), "需工坊");   // 无材料缺口=工坊门槛
         } else {
             int n = 0;
             for (int k = 0; k < 7; k++) {
@@ -1398,7 +1414,6 @@ static void render_craft(void) {
             }
             if (n == 0) snprintf(v, sizeof(v), "免费");
         }
-        bool can = dr_rules_craft_ready(&s.game, c);
         set_row(row, 52 + row * 23, t, v, s.focus == row, !can);
         s.craft_row_map[row] = c;
     }
@@ -1485,11 +1500,20 @@ static int page_lines(void) {
 // 建造行可用:材料足额付得起(可见性规则之上的硬门槛;不足的行不可选,
 // 光标跳过——三键约定"锁定或资源不足的行自动跳过")
 static bool build_affordable(uint8_t id) {
+    // 足额可付须查全部造价组件(与 dr_rules_build 同口径)——只查木/毛/肉会让
+    // 革/鳞不足的行(如工坊 800木100革10鳞)白字可选中,按确定才报"材料不够"
+    // 且只落日志(I29)。查全后行自动灰显并在 v 列展示"缺X革Y鳞"。
     dr_bld_cost_t c = dr_building_cost(id, s.game.building_lv[id]);
     if (c.wood == 0xFFFFFFFFu) return false;
     return s.game.res[DR_RES_WOOD] >= c.wood &&
            s.game.res[DR_RES_FUR] >= c.fur &&
-           s.game.res[DR_RES_MEAT] >= c.meat;
+           s.game.res[DR_RES_MEAT] >= c.meat &&
+           s.game.res[DR_RES_IRON] >= c.iron &&
+           s.game.res[DR_RES_COAL] >= c.coal &&
+           s.game.res[DR_RES_STEEL] >= c.steel &&
+           s.game.res[DR_RES_SULPHUR] >= c.sulphur &&
+           s.game.res[DR_RES_LEATHER] >= c.leather &&
+           s.game.res[DR_RES_SCALES] >= c.scales;
 }
 
 // 贸易行可用:纯支付能力检查(不执行交易;原版牌价见 dr_rules.c k_trade_cost)
