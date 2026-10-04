@@ -4,6 +4,19 @@
 #include "dr_events.h"
 #include "dr_util.h"
 
+// 减员裁岗:在编总数不得超过人口,否则幽灵工人照常产出(§3.3 硬化)。
+// 从职业表尾端撤起(确定性,便于测试;尾端未用槽位恒 0 不影响结果)。
+static void clip_jobs(dr_game_t *g) {
+    const int jobs = (int)(sizeof(g->job) / sizeof(g->job[0]));
+    uint32_t assigned = 0;
+    for (int i = 0; i < jobs; i++) assigned += g->job[i];
+    for (int i = jobs - 1; i >= 0 && assigned > g->population; i--) {
+        uint32_t cut = assigned - g->population;
+        if (g->job[i] > cut) { g->job[i] -= (uint16_t)cut; assigned -= cut; }
+        else                { assigned -= g->job[i]; g->job[i] = 0; }
+    }
+}
+
 // 单条件求值。纯函数,不依赖 RNG 以外的状态。
 static bool cond_eval(const dr_cond_t *c, const dr_game_t *g, dr_rng_t *rng) {
     switch ((dr_cond_op_t)c->op) {
@@ -13,6 +26,8 @@ static bool cond_eval(const dr_cond_t *c, const dr_game_t *g, dr_rng_t *rng) {
             return g->res[c->arg1] < c->arg2;
         case DR_COND_BUILDING_GE:
             return g->building_lv[c->arg1] >= c->arg2;
+        case DR_COND_BUILDING_LT:
+            return g->building_lv[c->arg1] < c->arg2;
         case DR_COND_FLAG_SET:
             return (g->flags >> (c->arg1 & 63u)) & 1u;
         case DR_COND_FLAG_CLEAR:
@@ -23,6 +38,8 @@ static bool cond_eval(const dr_cond_t *c, const dr_game_t *g, dr_rng_t *rng) {
             return dr_rng_chance(rng, c->arg2);
         case DR_COND_POP_GE:
             return g->population >= c->arg2;
+        case DR_COND_POP_LT:
+            return g->population < c->arg2;
         case DR_COND_NONE:
             return true;
         default:
@@ -46,6 +63,10 @@ dr_event_result_t dr_event_pick(const dr_event_t *events, uint16_t count,
                                 const dr_game_t *g, dr_event_session_t *sess,
                                 uint32_t now_ts, uint8_t scene,
                                 dr_rng_t *rng, uint16_t *out_idx) {
+    // 全局节拍门(原版 _EVENT_TIME_RANGE 3~6 分钟):上次触发后未到时
+    // 任何事件都不轮询,避免每事件独立冷却导致的整体频率失控。
+    if (sess->next_ok_ts != 0 && now_ts < sess->next_ok_ts)
+        return DR_EVENT_NONE;
     int best = -1;
     for (uint16_t i = 0; i < count; i++) {
         const dr_event_t *e = &events[i];
@@ -62,6 +83,8 @@ dr_event_result_t dr_event_pick(const dr_event_t *events, uint16_t count,
         }
     }
     if (best < 0) return DR_EVENT_NONE;
+    // 掷定下一次的全局节拍:180+rand(180) 秒(原版 3~6 分钟)
+    sess->next_ok_ts = now_ts + 180u + dr_rng_below(rng, 181u);
     if (out_idx) *out_idx = (uint16_t)best;
     return DR_EVENT_FIRED;
 }
@@ -80,7 +103,20 @@ dr_event_result_t dr_event_poll(const dr_event_t *events, uint16_t count,
     return r;
 }
 
-static void eff_apply(const dr_eff_t *f, dr_game_t *g, int16_t *chain_out) {
+bool dr_event_choice_affordable(const dr_event_t *e, uint8_t choice_idx,
+                                const dr_game_t *g) {
+    if (e == NULL || choice_idx >= e->choice_count) return false;
+    for (int i = 0; i < 2; i++) {
+        uint8_t r = e->choices[choice_idx].cost_res[i];
+        if (r == 0xFF) continue;
+        if (r >= DR_RES_KIND_COUNT) return false;
+        if (g->res[r] < e->choices[choice_idx].cost_amt[i]) return false;
+    }
+    return true;
+}
+
+static void eff_apply(const dr_eff_t *f, dr_game_t *g, dr_rng_t *rng,
+                      int16_t *chain_out) {
     switch ((dr_eff_op_t)f->op) {
         case DR_EFF_RES_ADD: {
             uint32_t *cur = &g->res[f->arg1];
@@ -100,7 +136,12 @@ static void eff_apply(const dr_eff_t *f, dr_game_t *g, int16_t *chain_out) {
             g->flags &= ~((uint64_t)1u << (f->arg1 & 63u));
             break;
         case DR_EFF_GOTO_EVENT:
-            *chain_out = (int16_t)f->arg1;
+            if (*chain_out < 0) *chain_out = (int16_t)f->arg1;  // 先到先得
+            break;
+        case DR_EFF_GOTO_W:
+            // 加权分支:命中即定链;未中继续后续效果(可再挂 GOTO_W/GOTO 兜底)
+            if (*chain_out < 0 && dr_rng_chance(rng, (uint16_t)f->arg2))
+                *chain_out = (int16_t)f->arg1;
             break;
         case DR_EFF_END_ACT:
             g->flags |= (uint64_t)1u << (f->arg1 & 63u);  // 幕标记也走 flags
@@ -108,17 +149,29 @@ static void eff_apply(const dr_eff_t *f, dr_game_t *g, int16_t *chain_out) {
         case DR_EFF_POP_ADD: {
             int32_t p = (int32_t)g->population + f->arg2;
             g->population = (p < 0) ? 0 : (uint16_t)p;
-            // 减员裁岗(§3.3 硬化):在编总数不得超过人口,否则减员后
-            // 幽灵工人照常产出;从职业表尾端撤起(确定性,便于测试,
-            // 尾端未用槽位恒 0 不影响结果)。
-            const int jobs = (int)(sizeof(g->job) / sizeof(g->job[0]));
-            uint32_t assigned = 0;
-            for (int i = 0; i < jobs; i++) assigned += g->job[i];
-            for (int i = jobs - 1; i >= 0 && assigned > g->population; i--) {
-                uint32_t cut = assigned - g->population;
-                if (g->job[i] > cut) { g->job[i] -= (uint16_t)cut; assigned -= cut; }
-                else                { assigned -= g->job[i]; g->job[i] = 0; }
-            }
+            clip_jobs(g);
+            break;
+        }
+        case DR_EFF_POP_FRAC: {
+            // 损失 floor(pop×permille/1000),至少 1(原版随机减员的中值离散化)
+            uint32_t loss = ((uint32_t)g->population * (uint32_t)f->arg2) / 1000u;
+            if (loss == 0) loss = 1;
+            if (loss > g->population) loss = g->population;
+            g->population = (uint16_t)(g->population - loss);
+            clip_jobs(g);
+            break;
+        }
+        case DR_EFF_BLD_ADD: {
+            int32_t lv = (int32_t)g->building_lv[f->arg1] + f->arg2;
+            g->building_lv[f->arg1] = (lv < 0) ? 0 : (uint8_t)lv;
+            break;
+        }
+        case DR_EFF_BLD_FRAC: {
+            uint8_t lv = g->building_lv[f->arg1];
+            uint32_t loss = ((uint32_t)lv * (uint32_t)f->arg2) / 1000u;
+            if (loss == 0) loss = 1;
+            if (loss > lv) loss = lv;
+            g->building_lv[f->arg1] = (uint8_t)(lv - loss);
             break;
         }
         case DR_EFF_NONE:
@@ -128,16 +181,26 @@ static void eff_apply(const dr_eff_t *f, dr_game_t *g, int16_t *chain_out) {
 
 int16_t dr_event_choose(const dr_event_t *events, uint16_t count,
                         dr_game_t *g, dr_event_session_t *sess,
-                        uint32_t now_ts, uint16_t event_idx, uint8_t choice_idx) {
+                        uint32_t now_ts, dr_rng_t *rng,
+                        uint16_t event_idx, uint8_t choice_idx) {
     (void)count;
     const dr_event_t *e = &events[event_idx];
     if (choice_idx >= e->choice_count) return -1;
+    if (!dr_event_choice_affordable(e, choice_idx, g))
+        return DR_EVENT_CHOOSE_REJECTED;
+
+    // 代价先扣(不足已在上面拦下)
+    for (int i = 0; i < 2; i++) {
+        uint8_t r = e->choices[choice_idx].cost_res[i];
+        if (r == 0xFF) continue;
+        g->res[r] -= e->choices[choice_idx].cost_amt[i];
+    }
 
     int16_t chain = -1;
     const dr_eff_t *effs = e->choices[choice_idx].effects;
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 4; i++) {
         if (effs[i].op == DR_EFF_NONE) break;
-        eff_apply(&effs[i], g, &chain);
+        eff_apply(&effs[i], g, rng, &chain);
     }
     g->event_count[event_idx]++;
     sess->last_fire_ts[event_idx] = now_ts;

@@ -102,9 +102,11 @@ static struct {
     dr_game_t game;
     dr_rules_rt_t rules_rt;
     dr_event_session_t ev_sess;
+    dr_rng_t ev_rng;         // 事件选项的 GOTO_W 掷点流(会话内;不落盘)
     page_t page;
     int focus;
     uint16_t ev_idx;
+    uint8_t ev_from;         // 事件弹出来源页(解决后回去;0=PG_TITLE 视同 HOME)
     bool dirty;
 } s;
 
@@ -1291,6 +1293,32 @@ static void render_settings(void) {
     set_row(6, 220, "返回", "", s.focus == 6, false);
 }
 
+// 事件选项标签:文案 + 代价后缀(如"给毛·50毛");数字统一由后缀显示
+static const char *k_res_str[DR_RES_KIND_COUNT] = {
+    [DR_RES_WOOD] = "木", [DR_RES_FUR] = "毛", [DR_RES_MEAT] = "肉",
+    [DR_RES_BAIT] = "饵", [DR_RES_WATER] = "水", [DR_RES_FOOD] = "干",
+    [DR_RES_IRON] = "铁", [DR_RES_COAL] = "煤", [DR_RES_STEEL] = "钢",
+    [DR_RES_SULPHUR] = "硫", [DR_RES_BULLETS] = "弹", [DR_RES_ALIEN] = "金",
+    [DR_RES_CHARM] = "符", [DR_RES_LEATHER] = "革", [DR_RES_SCALES] = "鳞",
+    [DR_RES_TEETH] = "牙", [DR_RES_CLOTH] = "布", [DR_RES_MEDICINE] = "药",
+};
+
+static const char *ev_choice_label(const dr_event_t *e, int i) {
+    static char buf[48];
+    snprintf(buf, sizeof(buf), "%s", dr_text(e->choices[i].text_id));
+    if (e->choices[i].cost_res[0] == 0xFF) return buf;
+    size_t n = strlen(buf);
+    for (int k = 0; k < 2 && n < sizeof(buf) - 10; k++) {
+        uint8_t r = e->choices[i].cost_res[k];
+        if (r == 0xFF) break;
+        int w = snprintf(buf + n, sizeof(buf) - n, "%s%u%s",
+                         k == 0 ? "·" : " ",
+                         e->choices[i].cost_amt[k], k_res_str[r]);
+        if (w > 0) n += (size_t)w;
+    }
+    return buf;
+}
+
 static void render_event(void) {
     uint16_t count = 0;
     const dr_event_t *ev = dr_events_table(&count);
@@ -1314,7 +1342,9 @@ static void render_event(void) {
         actrow_t *a = &s_dacts[i];
         lv_obj_clear_flag(a->row, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_pos(a->row, 0, 164 - (e->choice_count - 1 - i) * 24);
-        set_act(a, dr_text(e->choices[i].text_id), s.focus == i, 0);
+        set_act(a, ev_choice_label(e, i), s.focus == i, 0);
+        if (!dr_event_choice_affordable(e, (uint8_t)i, &s.game))
+            lv_obj_set_style_text_color(a->lbl, lv_color_hex(COL_DIM), 0);
     }
     for (int i = e->choice_count; i < 4; i++)
         lv_obj_add_flag(s_dacts[i].row, LV_OBJ_FLAG_HIDDEN);
@@ -1581,6 +1611,12 @@ static bool row_enabled(int idx) {
         case PG_CRAFT:
             return idx >= s.craft_row_count ||      // 返回
                    dr_rules_craft_ready(&s.game, s.craft_row_map[idx]);
+        case PG_EVENT: {
+            uint16_t c = 0;
+            const dr_event_t *ev = dr_events_table(&c);
+            return dr_event_choice_affordable(&ev[s.ev_idx], (uint8_t)idx,
+                                              &s.game);
+        }
         case PG_SETTINGS:
             return idx != 3 && idx != 4;            // 世界种子/存档为只读行
         default:
@@ -1949,15 +1985,23 @@ static void handle_ok(void) {
         case PG_EVENT: {
             uint16_t count = 0;
             const dr_event_t *ev = dr_events_table(&count);
+            const dr_event_t *cur = &ev[s.ev_idx];
+            if (!dr_event_choice_affordable(cur, (uint8_t)s.focus, &s.game)) {
+                log_push("身上的东西不够");   // 焦点跳过是第一道,这里兜底
+                break;
+            }
             int16_t chain = dr_event_choose(ev, count, &s.game, &s.ev_sess,
-                                            dr_port_now_ts(), s.ev_idx, s.focus);
+                                            dr_port_now_ts(), &s.ev_rng,
+                                            s.ev_idx, s.focus);
+            if (chain == DR_EVENT_CHOOSE_REJECTED) break;
             s.save_pending = true;
-            log_push(dr_text(ev[s.ev_idx].choices[s.focus].text_id));
+            log_push(dr_text(cur->choices[s.focus].text_id));
             if (chain >= 0) {
                 s.ev_idx = (uint16_t)chain;
                 s.focus = 0;
+                if (!row_enabled(0)) focus_move(1);   // 后续事件首行不可付则跳过
             } else {
-                page_goto(PG_HOME);
+                page_goto(s.ev_from == PG_VILLAGE ? PG_VILLAGE : PG_HOME);
             }
             break;
         }
@@ -2000,6 +2044,7 @@ static void check_event(void) {
     if (dr_event_poll(ev, count, &s.game, &s.ev_sess, dr_port_now_ts(),
                       scene, &idx) == DR_EVENT_FIRED) {
         s.ev_idx = idx;
+        s.ev_from = (uint8_t)s.page;   // 解决后回到来源页(村庄事件回村庄)
         page_goto(PG_EVENT);
     }
 }
@@ -2351,6 +2396,10 @@ void darkroom_app_enter(void) {
     }
 
     dr_event_session_init(&s.ev_sess);
+    // 全局节拍门起步 3 分钟(原版 scheduleNextEvent 首拍 3~6 分钟);
+    // 选项掷点流按地图种子派生,会话内确定。
+    s.ev_sess.next_ok_ts = dr_port_now_ts() + 180u;
+    dr_rng_seed(&s.ev_rng, (uint32_t)s.game.map_seed * 31u + 7u);
     dr_rules_rt_init(&s.rules_rt, &s.game, (uint32_t)(esp_timer_get_time() / 1000));
 
     // 离线结算:火焰熄灭 + 收入/陷阱补算(读档才有间隔)
