@@ -66,6 +66,20 @@ dr_event_result_t dr_event_pick(const dr_event_t *events, uint16_t count,
     return DR_EVENT_FIRED;
 }
 
+dr_event_result_t dr_event_poll(const dr_event_t *events, uint16_t count,
+                                dr_game_t *g, dr_event_session_t *sess,
+                                uint32_t now_ts, uint8_t scene,
+                                uint16_t *out_idx) {
+    dr_rng_t rng;
+    dr_rng_seed(&rng, g->rng_seed_state ^ 0xC0FFEEu);
+    dr_event_result_t r = dr_event_pick(events, count, g, sess, now_ts,
+                                        scene, &rng, out_idx);
+    // 未触发也回写推进后的序列:否则 CHANCE 未命中时下次轮询重新播种,
+    // 永远重掷出同一个值(§3.3 硬化)。
+    g->rng_seed_state = rng.s;
+    return r;
+}
+
 static void eff_apply(const dr_eff_t *f, dr_game_t *g, int16_t *chain_out) {
     switch ((dr_eff_op_t)f->op) {
         case DR_EFF_RES_ADD: {
@@ -94,6 +108,17 @@ static void eff_apply(const dr_eff_t *f, dr_game_t *g, int16_t *chain_out) {
         case DR_EFF_POP_ADD: {
             int32_t p = (int32_t)g->population + f->arg2;
             g->population = (p < 0) ? 0 : (uint16_t)p;
+            // 减员裁岗(§3.3 硬化):在编总数不得超过人口,否则减员后
+            // 幽灵工人照常产出;从职业表尾端撤起(确定性,便于测试,
+            // 尾端未用槽位恒 0 不影响结果)。
+            const int jobs = (int)(sizeof(g->job) / sizeof(g->job[0]));
+            uint32_t assigned = 0;
+            for (int i = 0; i < jobs; i++) assigned += g->job[i];
+            for (int i = jobs - 1; i >= 0 && assigned > g->population; i--) {
+                uint32_t cut = assigned - g->population;
+                if (g->job[i] > cut) { g->job[i] -= (uint16_t)cut; assigned -= cut; }
+                else                { assigned -= g->job[i]; g->job[i] = 0; }
+            }
             break;
         }
         case DR_EFF_NONE:

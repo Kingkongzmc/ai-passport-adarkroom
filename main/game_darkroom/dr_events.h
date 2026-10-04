@@ -106,6 +106,14 @@ dr_event_result_t dr_event_pick(const dr_event_t *events, uint16_t count,
                                 uint32_t now_ts, uint8_t scene,
                                 dr_rng_t *rng, uint16_t *out_idx);
 
+// 轮询封装(UI 心跳入口):以 g->rng_seed_state 派生独立序列挑选事件,
+// **无论是否触发都把推进后的序列写回 g**——CHANCE 未命中若不回写,
+// 下次轮询重新播种会永远重掷同一个值(§3.3 硬化)。
+dr_event_result_t dr_event_poll(const dr_event_t *events, uint16_t count,
+                                dr_game_t *g, dr_event_session_t *sess,
+                                uint32_t now_ts, uint8_t scene,
+                                uint16_t *out_idx);
+
 // 执行事件的某个选项(条件在 pick 时已判过)。应用效果并记账:
 // event_count++、last_fire_ts 更新、RNG 状态写回 g。
 // 返回 DR_EFF_GOTO_EVENT 链到的下一事件下标(无链返回 -1)。

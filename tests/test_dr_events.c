@@ -156,11 +156,79 @@ static void test_scene_mask_and_chain_effect(void) {
     assert(dr_event_choose(tbl, 2, &g, &sess, 1000, 0, 0) == 1);
 }
 
+// POP_ADD 减员裁岗(§3.3 硬化):在编总数不得超过人口,从职业表尾端撤
+static void test_pop_add_clips_jobs(void) {
+    dr_event_t tbl[1] = {0};
+    tbl[0].scene_mask = DR_SCENE_ANY;
+    tbl[0].choice_count = 1;
+    tbl[0].choices[0].effects[0] = (dr_eff_t){ (uint8_t)DR_EFF_POP_ADD, 0, -5 };
+
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    g.population = 10;
+    g.job[0] = 3;   // 猎人 3
+    g.job[1] = 4;   // 捕兽人 4(在编 7)
+    dr_event_session_t sess;
+    dr_event_session_init(&sess);
+    dr_rng_t rng;
+    dr_rng_seed(&rng, 1);
+    uint16_t idx;
+    assert(dr_event_pick(tbl, 1, &g, &sess, 1000, DR_SCENE_HOME, &rng, &idx)
+           == DR_EVENT_FIRED);
+    dr_event_choose(tbl, 1, &g, &sess, 1000, 0, 0);
+    assert(g.population == 5);
+    assert(g.job[0] == 3 && g.job[1] == 2);   // 尾端(捕兽人)撤 2,猎人保留
+
+    // 减员穿底到 0:全岗位清空,无幽灵工人
+    g.population = 2;
+    g.job[0] = 1; g.job[1] = 1;
+    dr_rng_seed(&rng, 2);
+    assert(dr_event_pick(tbl, 1, &g, &sess, 1000, DR_SCENE_HOME, &rng, &idx)
+           == DR_EVENT_FIRED);
+    dr_event_choose(tbl, 1, &g, &sess, 1000, 0, 0);
+    assert(g.population == 0);
+    assert(g.job[0] == 0 && g.job[1] == 0);
+}
+
+// dr_event_poll:未触发也回写概率序列(§3.3 硬化)——CHANCE 未命中
+// 不能每次轮询重掷同一个值;场景不匹配的轮询同样推进序列。
+static void test_poll_advances_seed(void) {
+    dr_event_t tbl[1] = {0};
+    tbl[0].scene_mask = DR_SCENE_HOME;
+    tbl[0].choice_count = 1;
+    tbl[0].conds[0] = (dr_cond_t){ (uint8_t)DR_COND_CHANCE, 0, 1 };  // 1‰
+
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    dr_event_session_t sess;
+    dr_event_session_init(&sess);
+    uint16_t idx;
+
+    uint32_t seed0 = g.rng_seed_state;
+    (void)dr_event_poll(tbl, 1, &g, &sess, 1000, DR_SCENE_HOME, &idx);
+    assert(g.rng_seed_state != seed0);   // 修前:未触发不回写,恒为 seed0
+
+    // 场景不匹配(事件挂 HOME,按 VILLAGE 轮询):序列同样推进
+    uint32_t seed1 = g.rng_seed_state;
+    (void)dr_event_poll(tbl, 1, &g, &sess, 1000, DR_SCENE_VILLAGE, &idx);
+    assert(g.rng_seed_state != seed1);
+
+    // 连续轮询序列持续变化(不存在停在首个值上的死序列)
+    uint32_t prev = g.rng_seed_state;
+    for (int i = 0; i < 8; i++) {
+        (void)dr_event_poll(tbl, 1, &g, &sess, 1000, DR_SCENE_HOME, &idx);
+        assert(g.rng_seed_state != prev);
+        prev = g.rng_seed_state;
+    }
+}
+
 int main(void) {
     test_table_empty_but_valid();
     test_condition_gates_and_effects();
     test_session_cooldown();
     test_scene_mask_and_chain_effect();
+    test_pop_add_clips_jobs();
+    test_poll_advances_seed();
     printf("test_dr_events: all passed\n");
     return 0;
 }

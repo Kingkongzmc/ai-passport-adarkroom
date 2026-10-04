@@ -1980,15 +1980,25 @@ static void handle_ok(void) {
 // ===================================================================
 // 事件触发(必须走 page_goto)
 // ===================================================================
+// 轮询场景:主页/村庄页各挂各的场景位(§3.3 硬化:此前只挂小屋页,
+// 挂 VILLAGE 场景的事件永远不会触发)。远征/战斗/弹窗中不轮询。
+static uint8_t event_scene(void) {
+    switch (s.page) {
+        case PG_HOME:    return DR_SCENE_HOME;
+        case PG_VILLAGE: return DR_SCENE_VILLAGE;
+        default:         return 0;   // 该页不轮询
+    }
+}
+
 static void check_event(void) {
+    uint8_t scene = event_scene();
+    if (scene == 0) return;
     uint16_t count = 0;
     const dr_event_t *ev = dr_events_table(&count);
-    dr_rng_t rng;
-    dr_rng_seed(&rng, s.game.rng_seed_state ^ 0xC0FFEEu);
     uint16_t idx;
-    if (dr_event_pick(ev, count, &s.game, &s.ev_sess, dr_port_now_ts(),
-                      DR_SCENE_HOME, &rng, &idx) == DR_EVENT_FIRED) {
-        s.game.rng_seed_state = rng.s;
+    // dr_event_poll:未触发也回写概率序列(§3.3 硬化,CHANCE 不重掷同值)
+    if (dr_event_poll(ev, count, &s.game, &s.ev_sess, dr_port_now_ts(),
+                      scene, &idx) == DR_EVENT_FIRED) {
         s.ev_idx = idx;
         page_goto(PG_EVENT);
     }
@@ -2058,8 +2068,9 @@ static void tick(lv_timer_t *t) {
                 break;
         }
     }
-    if (s.page == PG_HOME) {
+    if (s.page == PG_HOME || s.page == PG_VILLAGE)
         check_event();
+    if (s.page == PG_HOME) {
         // 添柴冷却条随 250ms 心跳逐拍收短;冷却结束瞬间也要重绘一次清掉底色
         int32_t s_rem = (int32_t)(s.rules_rt.stoke_ready_ms - now_ms);
         if (s_rem > 0 || s.prev_stoke_active) s.dirty = true;
