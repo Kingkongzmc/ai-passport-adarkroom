@@ -97,6 +97,8 @@ static struct {
     uint32_t autosave_ms;      // 周期存档基准(挂机产出也落盘,断电回滚≤1分钟)
     uint32_t embark_cd_ms;     // 出发冷却到期时刻(死亡后 120s,原版口径)
     int8_t outfit_adj;         // 出发整备:正在调配的物资(-1=无)
+    bool screen_off;           // 熄屏态(背光 0,任意键唤醒并吞键,DESIGN §8.1)
+    uint32_t last_input_ms;    // 最近一次真实按键(自动熄屏计时基准)
     dr_game_t game;
     dr_rules_rt_t rules_rt;
     dr_event_session_t ev_sess;
@@ -701,6 +703,28 @@ static void clear_scene(void) {
 }
 
 // ===================================================================
+// 熄屏(DESIGN §8.1 L1 的设备形态:背光全灭,游戏照常运行/存档)
+// ===================================================================
+// 档位 0..4:关/30秒/1分/2分/5分;存档 _rsv[1](0=关,老档零迁移)。
+// 手动:任意页长按下键(村庄调节内长按上下=±5 优先);唤醒:任意键,唤醒键被
+// 吞掉不触发游戏动作;战斗/事件/确认弹屏中挂起自动计时(§8.1),手动不受限。
+#define DR_BL_ON 100
+static const uint16_t k_scr_off_s[5] = { 0, 30, 60, 120, 300 };
+static const char *const k_scr_off_lbl[5] = { "关", "30秒", "1分", "2分", "5分" };
+static uint8_t scr_off_level(void) {
+    uint8_t v = s.game._rsv[1];
+    return (v > 4) ? 4 : v;
+}
+static void screen_off_now(void) {
+    s.screen_off = true;
+    bsp_display_backlight(0);
+}
+static void screen_wake(void) {
+    s.screen_off = false;
+    bsp_display_backlight(DR_BL_ON);
+}
+
+// ===================================================================
 // 页面渲染
 // ===================================================================
 static int home_lines(void) {
@@ -1258,7 +1282,9 @@ static void render_settings(void) {
     snprintf(seed, sizeof(seed), "%u", (unsigned)s.game.map_seed);
     set_row(3, 136, "世界种子", seed, s.focus == 3, true);   // 只读:存档同图复现
     set_row(4, 164, "存档", "自动·1分钟", false, true);    // 只读:落盘节奏说明
-    set_row(5, 192, "返回", "", s.focus == 5, false);
+    set_row(5, 192, "熄屏", k_scr_off_lbl[scr_off_level()],
+            s.focus == 5, false);                          // 长按下键随时手动熄屏
+    set_row(6, 220, "返回", "", s.focus == 6, false);
 }
 
 static void render_event(void) {
@@ -1445,7 +1471,7 @@ static int page_lines(void) {
         case PG_RUIN: return 2;    // 搜索 / 离开
         case PG_COMBAT: return 4;
         case PG_TRADE: return 9;
-        case PG_SETTINGS: return 6;   // 说明/重开/关于/种子/存档/返回
+        case PG_SETTINGS: return 7;   // 说明/重开/关于/种子/存档/熄屏/返回
         case PG_EVENT: {
             uint16_t c = 0;
             const dr_event_t *ev = dr_events_table(&c);
@@ -1861,7 +1887,7 @@ static void list_action(int idx) {
             break;
         }
         case PG_SETTINGS:
-            if (idx == 5) page_goto(PG_HOME);
+            if (idx == 6) page_goto(PG_HOME);
             else if (idx == 0) log_push("上/下选择 · 确定执行 · 长按返回");
             else if (idx == 1) {                       // 重开本局:需确认
                 s.confirm_from = 0;
@@ -1869,6 +1895,12 @@ static void list_action(int idx) {
             }
             else if (idx == 3) log_push("种子决定地图与随机序列");
             else if (idx == 4) log_push("每分钟或按键后自动落盘");
+            else if (idx == 5) {                       // 熄屏档位循环
+                uint8_t lv = (uint8_t)((scr_off_level() + 1) % 5);
+                s.game._rsv[1] = lv;
+                s.save_pending = true;
+                log_push(lv ? "熄屏已开,长按下键手动熄屏" : "熄屏已关");
+            }
             else log_push("《小黑屋》A Dark Room 重制");
             break;
         default:
@@ -2019,6 +2051,16 @@ static void tick(lv_timer_t *t) {
         s.prev_gather_ready = g_act;
         s.prev_trap_ready = t_act;
     }
+    // 自动熄屏:档位非关 + 无操作超时;战斗/事件/确认弹屏中挂起计时(§8.1,
+    // 交互中突然黑屏会坑人),手动长按下不受此限
+    if (!s.screen_off) {
+        uint16_t to_s = k_scr_off_s[scr_off_level()];
+        bool in_dialog = s.page == PG_COMBAT || s.page == PG_EVENT ||
+                         s.page == PG_CONFIRM;
+        if (to_s > 0 && !in_dialog &&
+            now_ms - s.last_input_ms >= (uint32_t)to_s * 1000u)
+            screen_off_now();
+    }
     // 周期存档:纯挂机时收入产出也落盘(与按键/渲染同在 LVGL
     // 线程,天然与状态变更互斥;NVS 写入约毫秒级,每分钟一次可接受)
     if (now_ms - s.autosave_ms >= 60000u) {
@@ -2054,6 +2096,11 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     if (btn != BSP_BTN_UP && btn != BSP_BTN_DOWN && btn != BSP_BTN_OK) return;
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     if (now_ms - s.boot_ms < 1500u) return;  // 开机防抖
+    s.last_input_ms = now_ms;                // 任何真实按键重置熄屏计时
+    if (s.screen_off) {                      // 任意键唤醒,唤醒键吞掉不触发游戏动作
+        screen_wake();
+        return;
+    }
 
     if (ev == BSP_BTN_PRESS) {
         // 渲染静默期:渲染电流尖峰制造的幽灵按键紧贴渲染出现
@@ -2193,6 +2240,11 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             }
             return;
         }
+        // 长按下键=手动熄屏(村庄调节分支已在上方 return;无电源键的设备形态)
+        if (btn == BSP_BTN_DOWN) {
+            screen_off_now();
+            return;
+        }
         if (btn != BSP_BTN_OK) return;
         // 危险操作的长按快捷路径:同样走确认弹窗(与按下确定一致)
         if (s.page == PG_SETTINGS && s.focus == 1) {
@@ -2242,6 +2294,7 @@ void darkroom_app_enter(void) {
     s.village_adj = -1; // -1 = 村庄页未进入人数调节
     s.outfit_adj = -1;  // -1 = 未在整备调配
     s.boot_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    s.last_input_ms = s.boot_ms;   // 熄屏计时与开机防抖同基准
 
     dr_port_storage_init();
     bool loaded = false;

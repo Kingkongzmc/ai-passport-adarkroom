@@ -143,6 +143,7 @@ void sim_lvgl_unlock(void) { pthread_mutex_unlock(&s_lvgl_mtx); }
 // ---------------------------------------------------------------------------
 // 显示:内存帧缓冲(XRGB8888)+ BMP 导出
 // ---------------------------------------------------------------------------
+int g_sim_backlight = 100;   // 背光桩记录(bsp_display.h 垫片引用)
 static uint8_t s_fb[SIM_W * SIM_H * 4];
 static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px) {
     (void)area; (void)px;
