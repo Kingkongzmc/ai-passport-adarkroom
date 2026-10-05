@@ -1195,13 +1195,17 @@ static void render_map(void) {
                      (long)((s.embark_cd_ms - now_ms + 999) / 1000));
         else
             snprintf(v, sizeof(v), "就绪");
-        set_row(5, 182, "出发远征", v, s.focus == 5, s.game.food == 0);
+        // 冷却中也置灰(仍可聚焦,确定弹"歇一歇"提示)——只按 food 置灰会让
+        // 冷却行看似正常却选不中,像死键(真机反馈 2026-10-05)
+        set_row(5, 182, "出发远征", v, s.focus == 5,
+                s.game.food == 0 ||
+                    (int32_t)(now_ms - s.embark_cd_ms) < 0);
         set_row(6, 208, "返回", "", s.focus == 6, false);
         for (int i = 7; i < LIST_ROWS; i++) lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_pos(s_hint, 0, 238);
         if (adj)
-            lv_label_set_text(s_hint, "上加1 下减1(长按=5) 确定=下一项");
+            lv_label_set_text(s_hint, "上下=±1 长按=5/完成 确定=下一项");
         else if (s.game.food == 0)
             lv_label_set_text(s_hint, "整备干肉后才能出发(库→带)");
         else
@@ -1721,10 +1725,9 @@ static bool row_enabled(int idx) {
                 if (idx == 2) return s.game.res[DR_RES_BULLETS] > 0 ||
                                    dr_world_carry_bullets(&s_world) > 0;
                 if (idx == 3 || idx == 4) return false;        // 武器/护甲只读
-                // idx 5 = 出发:需已带干肉 + 冷却已过
-                uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-                return s.game.food > 0 &&
-                       (int32_t)(now_ms - s.embark_cd_ms) >= 0;
+                // idx 5 = 出发:需已带干肉。冷却中仍可选(渲染置灰+确定给
+                // toast 反馈)——此前冷却期静默跳焦,用户"点了没反应"(真机反馈)
+                return s.game.food > 0;
             }
             if (idx == 4) return s.game.food > 0;   // 吃干肉
             return idx < 4;                          // 东南西北
@@ -2476,6 +2479,28 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                 s.save_pending = true;
                 s.dirty = true;
             }
+            return;
+        }
+        // 荒野整备调节:长按确定=完成退出;长按上/下=±5(与村庄调节同款;
+        // 此前长按分支不覆盖整备,提示承诺的"长按=5"实为不生效,真机反馈)
+        if (s.page == PG_MAP && !s.game.in_wilderness && s.outfit_adj >= 0) {
+            if (btn == BSP_BTN_OK) {
+                s.outfit_adj = -1;
+                s.dirty = true;
+                return;
+            }
+            static const uint8_t outfit_res[3] = {
+                DR_RES_FOOD, DR_RES_MEDICINE, DR_RES_BULLETS
+            };
+            int16_t d = (btn == BSP_BTN_UP) ? 5 : -5;
+            if (!dr_world_outfit_add(&s_world, &s.game,
+                                     outfit_res[s.outfit_adj], d)) {
+                const char *m = d > 0 ? "背袋满了或库存不足" : "已经没有携带了";
+                log_push(m);
+                toast(m);
+            }
+            s.save_pending = true;
+            s.dirty = true;
             return;
         }
         // 长按下键=手动熄屏(村庄调节分支已在上方 return;无电源键的设备形态)
