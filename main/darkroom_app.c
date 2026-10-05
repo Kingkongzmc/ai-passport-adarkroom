@@ -139,7 +139,7 @@ static actrow_t s_dacts[4];
 // 地图/房间格阵 + 图例 + 血条
 #define MAP_CELLS 81
 static lv_obj_t *s_map[MAP_CELLS];
-#define LEG_KINDS 5                    // 图例:森林/田野/荒地/村庄/主角
+#define LEG_KINDS 14                   // 图例:全量地块色(地形/村庄/主角/矿/地点)
 static lv_obj_t *s_legchip[LEG_KINDS], *s_legtxt[LEG_KINDS];
 #define ROOM_CELLS 9
 static lv_obj_t *s_room[ROOM_CELLS];
@@ -495,10 +495,10 @@ static void build_ui(void) {
     lv_obj_set_style_text_align(tok, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(tok, "OK键开始");
 
-    // 地图 9×9 格 @(50,44) 格10px 间隔1
+    // 地图 9×9 格 @(14,44) 格10px 间隔1(左移腾出右侧全量图例双列)
     for (int i = 0; i < MAP_CELLS; i++) {
         s_map[i] = lv_obj_create(s_content);
-        lv_obj_set_pos(s_map[i], 50 + (i % 9) * 11, 44 + (i / 9) * 11);
+        lv_obj_set_pos(s_map[i], 14 + (i % 9) * 11, 44 + (i / 9) * 11);
         lv_obj_set_size(s_map[i], 10, 10);
         lv_obj_set_style_radius(s_map[i], 0, 0);
         lv_obj_set_style_border_width(s_map[i], 1, 0);
@@ -506,31 +506,32 @@ static void build_ui(void) {
         lv_obj_set_style_bg_color(s_map[i], lv_color_hex(COL_BG), 0);
         lv_obj_set_style_pad_all(s_map[i], 0, 0);
     }
-    // 地图图例一行(远征态,地图带 143-167 空档):色块+名称,居中排布
+    // 全量图例(远征态,地图右侧双列 7 行):色块+短名,覆盖全部地块色。
+    // 左列=地形与核心,右列=矿与地点;名称≤2 字,硫磺矿简作"硫矿"。
     static const struct { uint32_t col; const char *name; } k_leg[LEG_KINDS] = {
-        { 0x3B5323, "森林" }, { 0x77804A, "田野" }, { 0x6E5B3F, "荒地" },
-        { COL_GOLD, "村庄" }, { COL_ME,   "你"   },
+        { 0x3B5323, "森林" }, { 0xAFAFBC, "铁矿" },
+        { 0x77804A, "田野" }, { 0x40404A, "煤矿" },
+        { 0x6E5B3F, "荒地" }, { 0xC9C25B, "硫矿" },
+        { COL_GOLD, "村庄" }, { 0xC9A06B, "老屋" },
+        { COL_ME,   "你"   }, { 0x6B7FC9, "洞穴" },
+        { 0x5BC8C8, "哨站" }, { 0xC96B8E, "废镇" },
+        { 0xC85BC8, "星舰" }, { 0x8E6BC9, "城市" },
     };
     {
-        int tw[LEG_KINDS], total = 0;
+        static const int colx[2] = { 116, 158 };   // 双列 x(列宽 42,尾列止 193)
         for (int i = 0; i < LEG_KINDS; i++) {
-            tw[i] = 12 * (int)(strlen(k_leg[i].name) / 3);   // CJK 3 字节/字
-            total += 9 + 3 + tw[i] + (i < LEG_KINDS - 1 ? 6 : 0);
-        }
-        int x = (198 - total) / 2;
-        if (x < 0) x = 0;
-        for (int i = 0; i < LEG_KINDS; i++) {
+            int x = colx[i / 7];
+            int y = 44 + (i % 7) * 14;             // 7 行 × 14,与地图带同高
             s_legchip[i] = lv_obj_create(s_content);
-            lv_obj_set_pos(s_legchip[i], x, 147);
-            lv_obj_set_size(s_legchip[i], 9, 9);
+            lv_obj_set_pos(s_legchip[i], x, y + 2);
+            lv_obj_set_size(s_legchip[i], 8, 8);
             lv_obj_set_style_radius(s_legchip[i], 1, 0);
             lv_obj_set_style_bg_color(s_legchip[i], lv_color_hex(k_leg[i].col), 0);
             lv_obj_set_style_border_width(s_legchip[i], 0, 0);
             lv_obj_set_style_pad_all(s_legchip[i], 0, 0);
             s_legtxt[i] = label_new(s_content, &dr_font_12, lv_color_hex(COL_DIM),
-                                    x + 12, 145, tw[i] + 2, 15);
+                                    x + 11, y, 26, 13);
             lv_label_set_text(s_legtxt[i], k_leg[i].name);
-            x += 9 + 3 + tw[i] + 6;
         }
     }
 
@@ -1146,7 +1147,7 @@ static void render_map(void) {
         lv_obj_set_style_bg_color(s_map[i],
             lv_color_hex(me ? COL_ME : map_tile_color(t, seen)), 0);
     }
-    // 图例一行(地图带与方向行之间的 143-167 空档):颜色→含义钥匙
+    // 全量图例(地图右侧双列):颜色→含义钥匙
     for (int i = 0; i < LEG_KINDS; i++) {
         lv_obj_clear_flag(s_legchip[i], LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_legtxt[i], LV_OBJ_FLAG_HIDDEN);
