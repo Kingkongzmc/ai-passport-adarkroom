@@ -20,6 +20,7 @@
 #include "darkroom_app.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "bsp_battery.h"
@@ -138,7 +139,8 @@ static actrow_t s_dacts[4];
 // 地图/房间格阵 + 图例 + 血条
 #define MAP_CELLS 81
 static lv_obj_t *s_map[MAP_CELLS];
-static lv_obj_t *s_legend[2];
+#define LEG_KINDS 5                    // 图例:森林/田野/荒地/村庄/主角
+static lv_obj_t *s_legchip[LEG_KINDS], *s_legtxt[LEG_KINDS];
 #define ROOM_CELLS 9
 static lv_obj_t *s_room[ROOM_CELLS];
 static lv_obj_t *s_hp[2], *s_hpfill[2];
@@ -504,11 +506,32 @@ static void build_ui(void) {
         lv_obj_set_style_bg_color(s_map[i], lv_color_hex(COL_BG), 0);
         lv_obj_set_style_pad_all(s_map[i], 0, 0);
     }
-    // 图例两行 @ y=146/161(居中)
-    for (int i = 0; i < 2; i++) {
-        s_legend[i] = label_new(s_content, &dr_font_12, lv_color_hex(COL_DIM),
-                                0, 146 + i * 15, 198, 15);
-        lv_obj_set_style_text_align(s_legend[i], LV_TEXT_ALIGN_CENTER, 0);
+    // 地图图例一行(远征态,地图带 143-167 空档):色块+名称,居中排布
+    static const struct { uint32_t col; const char *name; } k_leg[LEG_KINDS] = {
+        { 0x3B5323, "森林" }, { 0x77804A, "田野" }, { 0x6E5B3F, "荒地" },
+        { COL_GOLD, "村庄" }, { COL_ME,   "你"   },
+    };
+    {
+        int tw[LEG_KINDS], total = 0;
+        for (int i = 0; i < LEG_KINDS; i++) {
+            tw[i] = 12 * (int)(strlen(k_leg[i].name) / 3);   // CJK 3 字节/字
+            total += 9 + 3 + tw[i] + (i < LEG_KINDS - 1 ? 6 : 0);
+        }
+        int x = (198 - total) / 2;
+        if (x < 0) x = 0;
+        for (int i = 0; i < LEG_KINDS; i++) {
+            s_legchip[i] = lv_obj_create(s_content);
+            lv_obj_set_pos(s_legchip[i], x, 147);
+            lv_obj_set_size(s_legchip[i], 9, 9);
+            lv_obj_set_style_radius(s_legchip[i], 1, 0);
+            lv_obj_set_style_bg_color(s_legchip[i], lv_color_hex(k_leg[i].col), 0);
+            lv_obj_set_style_border_width(s_legchip[i], 0, 0);
+            lv_obj_set_style_pad_all(s_legchip[i], 0, 0);
+            s_legtxt[i] = label_new(s_content, &dr_font_12, lv_color_hex(COL_DIM),
+                                    x + 12, 145, tw[i] + 2, 15);
+            lv_label_set_text(s_legtxt[i], k_leg[i].name);
+            x += 9 + 3 + tw[i] + 6;
+        }
     }
 
     // 房间 3×3 格 @(58,44) 格26px 间隔2
@@ -703,7 +726,10 @@ static void clear_scene(void) {
     lv_obj_add_flag(s_t_sub, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_t_ok, LV_OBJ_FLAG_HIDDEN);
     for (int i = 0; i < MAP_CELLS; i++) lv_obj_add_flag(s_map[i], LV_OBJ_FLAG_HIDDEN);
-    for (int i = 0; i < 2; i++) lv_obj_add_flag(s_legend[i], LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < LEG_KINDS; i++) {
+        lv_obj_add_flag(s_legchip[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_legtxt[i], LV_OBJ_FLAG_HIDDEN);
+    }
     for (int i = 0; i < ROOM_CELLS; i++) lv_obj_add_flag(s_room[i], LV_OBJ_FLAG_HIDDEN);
     for (int i = 0; i < 2; i++) lv_obj_add_flag(s_hp[i], LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_veil, LV_OBJ_FLAG_HIDDEN);
@@ -1120,6 +1146,11 @@ static void render_map(void) {
         lv_obj_set_style_bg_color(s_map[i],
             lv_color_hex(me ? COL_ME : map_tile_color(t, seen)), 0);
     }
+    // 图例一行(地图带与方向行之间的 143-167 空档):颜色→含义钥匙
+    for (int i = 0; i < LEG_KINDS; i++) {
+        lv_obj_clear_flag(s_legchip[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_legtxt[i], LV_OBJ_FLAG_HIDDEN);
+    }
     for (int i = 0; i < 4; i++) {
         cell_base(i, i * 49, 24);
         lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
@@ -1175,8 +1206,6 @@ static void render_ruin(void) {
             lv_color_hex(i == 4 ? map_tile_color(dr_world_location(&s_world), true)
                                 : COL_PANEL), 0);
     }
-    lv_obj_add_flag(s_legend[0], LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_legend[1], LV_OBJ_FLAG_HIDDEN);
     bool has_torch =
         (s.game.flags & ((uint64_t)1u << DR_FLAG_TORCH)) != 0;
     set_row(0, 150, "搜索", "再掷一次", s.focus == 0, false);
@@ -2509,6 +2538,20 @@ void darkroom_app_stop(void) {
     if (s_key_queue) { vQueueDelete(s_key_queue); s_key_queue = NULL; }
     if (s_scr) { lv_obj_delete(s_scr); s_scr = NULL; }
     save_all();
+}
+
+// 模拟器诊断:注入"远征中"状态并直达荒野页(仅主机构建使用)。存档口径
+// 必清 in_wilderness("远征中断电=死亡"),enter 后注入绕开该兜底,供荒野页/
+// 战斗页截图与断言(SIM_WILD)。
+void dr_debug_set_wild(uint8_t x, uint8_t y) {
+    s.game.in_wilderness = 1;
+    s.game.food = 8; s.game.water = 8;
+    s.game.hero_hp = s.game.hero_hp_max = 10;
+    s.game.hero_x = x; s.game.hero_y = y;
+    s.game.res[DR_RES_FOOD] = 20;
+    s.page = PG_MAP;
+    s.focus = 0;
+    s.dirty = true;
 }
 
 // 模拟器诊断:打印对象树关键状态(仅主机构建使用)

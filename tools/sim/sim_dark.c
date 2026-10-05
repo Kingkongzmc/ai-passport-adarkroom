@@ -214,6 +214,14 @@ int main(int argc, char **argv) {
     lv_display_set_flush_cb(disp, flush_cb);
 
     darkroom_app_enter();
+    // SIM_WILD=1:enter 后注入"远征中"(存档/启动兜底都按"断电=死亡"
+    // 清 in_wilderness,只能事后注入)。SIM_WILD_XY=<x>,<y> 指定所在格。
+    if (getenv("SIM_WILD")) {
+        uint8_t wx = 35, wy = 30;
+        char *xy = getenv("SIM_WILD_XY");
+        if (xy) sscanf(xy, "%hhu,%hhu", &wx, &wy);
+        dr_debug_set_wild(wx, wy);
+    }
 
     for (int f = 0; f < frames; f++) {
         for (int k = 0; k < s_key_count; k++)
