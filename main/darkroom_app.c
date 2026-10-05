@@ -52,7 +52,7 @@ LV_FONT_DECLARE(dr_font_24);
 #define COL_GOLD   0xFFD928
 #define COL_CD     0x3A3A44
 #define COL_LOCK   0x57534E
-#define COL_ME     0x4A90D9
+#define COL_ME     0x66B2FF
 #define COL_ENEMY  0xE43B2F
 
 // ---- 布局常量(全屏面板 + 居中内容区) ----
@@ -302,6 +302,9 @@ static void set_dbody(const char *text) {
 static lv_obj_t *s_t_big, *s_t_sub;    // 标题页大标题/副文案(专用)
 static lv_obj_t *s_t_ok;
 
+// 地形纹样描述符(定义见文件后部,图例在此先取址)
+static const lv_image_dsc_t k_pat_dots, k_pat_hstrip, k_pat_diag;
+
 static void build_ui(void) {
     s_scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr, lv_color_hex(COL_BG), 0);
@@ -495,6 +498,7 @@ static void build_ui(void) {
     lv_obj_set_style_text_align(tok, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(tok, "OK键开始");
 
+
     // 地图 9×9 格 @(14,44) 格10px 间隔1(左移腾出右侧全量图例双列)
     for (int i = 0; i < MAP_CELLS; i++) {
         s_map[i] = lv_obj_create(s_content);
@@ -507,15 +511,17 @@ static void build_ui(void) {
         lv_obj_set_style_pad_all(s_map[i], 0, 0);
     }
     // 全量图例(远征态,地图右侧双列 7 行):色块+短名,覆盖全部地块色。
-    // 左列=地形与核心,右列=矿与地点;名称≤2 字,硫磺矿简作"硫矿"。
-    static const struct { uint32_t col; const char *name; } k_leg[LEG_KINDS] = {
-        { 0x3B5323, "森林" }, { 0xAFAFBC, "铁矿" },
-        { 0x77804A, "田野" }, { 0x40404A, "煤矿" },
-        { 0x6E5B3F, "荒地" }, { 0xC9C25B, "硫矿" },
-        { COL_GOLD, "村庄" }, { 0xC9A06B, "老屋" },
-        { COL_ME,   "你"   }, { 0x6B7FC9, "洞穴" },
-        { 0x5BC8C8, "哨站" }, { 0xC96B8E, "废镇" },
-        { 0xC85BC8, "星舰" }, { 0x8E6BC9, "城市" },
+    // 左列=地形与核心,右列=矿与地点;三地形色块与地图同款纹样。
+    static const struct {
+        uint32_t col; const char *name; const lv_image_dsc_t *pat;
+    } k_leg[LEG_KINDS] = {
+        { 0x2E5E1E, "森林", &k_pat_dots },  { 0x707078, "铁矿", NULL },
+        { 0xC8B84B, "田野", &k_pat_hstrip },{ 0x26262E, "煤矿", NULL },
+        { 0x967850, "荒地", &k_pat_diag },  { 0x9B8C34, "硫矿", NULL },
+        { COL_GOLD, "村庄", NULL },          { 0x965F37, "老屋", NULL },
+        { COL_ME,   "你",   NULL },          { 0x4B64BE, "洞穴", NULL },
+        { 0x9AE8E8, "哨站", NULL },          { 0xF29E9E, "废镇", NULL },
+        { 0xC060D8, "星舰", NULL },          { 0x5A3A90, "城市", NULL },
     };
     {
         static const int colx[2] = { 116, 158 };   // 双列 x(列宽 42,尾列止 193)
@@ -524,13 +530,14 @@ static void build_ui(void) {
             int y = 44 + (i % 7) * 14;             // 7 行 × 14,与地图带同高
             s_legchip[i] = lv_obj_create(s_content);
             lv_obj_set_pos(s_legchip[i], x, y + 2);
-            lv_obj_set_size(s_legchip[i], 8, 8);
+            lv_obj_set_size(s_legchip[i], 10, 10);
             lv_obj_set_style_radius(s_legchip[i], 1, 0);
             lv_obj_set_style_bg_color(s_legchip[i], lv_color_hex(k_leg[i].col), 0);
+            lv_obj_set_style_bg_image_src(s_legchip[i], k_leg[i].pat, 0);
             lv_obj_set_style_border_width(s_legchip[i], 0, 0);
             lv_obj_set_style_pad_all(s_legchip[i], 0, 0);
             s_legtxt[i] = label_new(s_content, &dr_font_12, lv_color_hex(COL_DIM),
-                                    x + 11, y, 26, 13);
+                                    x + 13, y, 26, 13);
             lv_label_set_text(s_legtxt[i], k_leg[i].name);
         }
     }
@@ -1026,22 +1033,88 @@ static void render_village(void) {
 }
 
 // 地形/地标配色(荒野视口)
+// 地形纹样(色弱第二编码,10×10 透明底覆盖层):森林=白点纹(暗底)、
+// 田野=黑横纹(亮底)、荒地=黑斜纹。叠加在地块底色上,图例色块同款。
+static const uint32_t k_pat_DOTS_px[100] = {
+    0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x00000000, 0x59FFFFFF, 0x59FFFFFF, 0x00000000, 0x00000000, 0x00000000, 0x59FFFFFF, 0x59FFFFFF, 0x00000000, 0x00000000,
+    0x00000000, 0x59FFFFFF, 0x59FFFFFF, 0x00000000, 0x00000000, 0x00000000, 0x59FFFFFF, 0x59FFFFFF, 0x00000000, 0x00000000,
+    0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x00000000, 0x00000000, 0x00000000, 0x59FFFFFF, 0x59FFFFFF, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x00000000, 0x00000000, 0x00000000, 0x59FFFFFF, 0x59FFFFFF, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x00000000, 0x59FFFFFF, 0x59FFFFFF, 0x00000000, 0x00000000, 0x00000000, 0x59FFFFFF, 0x59FFFFFF, 0x00000000, 0x00000000,
+    0x00000000, 0x59FFFFFF, 0x59FFFFFF, 0x00000000, 0x00000000, 0x00000000, 0x59FFFFFF, 0x59FFFFFF, 0x00000000, 0x00000000,
+    0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+};
+static const uint32_t k_pat_HSTRIP_px[100] = {
+    0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000,
+    0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000,
+    0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000,
+    0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000, 0x73000000,
+    0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+};
+static const uint32_t k_pat_DIAG_px[100] = {
+    0x73000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x73000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x00000000, 0x73000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x73000000, 0x00000000, 0x00000000, 0x00000000,
+    0x00000000, 0x00000000, 0x73000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x73000000, 0x00000000, 0x00000000,
+    0x00000000, 0x00000000, 0x00000000, 0x73000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x73000000, 0x00000000,
+    0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x73000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x73000000,
+    0x73000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x73000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000,
+    0x00000000, 0x73000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x73000000, 0x00000000, 0x00000000, 0x00000000,
+    0x00000000, 0x00000000, 0x73000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x73000000, 0x00000000, 0x00000000,
+    0x00000000, 0x00000000, 0x00000000, 0x73000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x73000000, 0x00000000,
+    0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x73000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x73000000,
+};
+static const lv_image_dsc_t k_pat_dots = {
+    .header = { .w = 10, .h = 10, .cf = LV_COLOR_FORMAT_ARGB8888 },
+    .data = (const uint8_t *)k_pat_DOTS_px,
+    .data_size = sizeof(k_pat_DOTS_px),
+};
+static const lv_image_dsc_t k_pat_hstrip = {
+    .header = { .w = 10, .h = 10, .cf = LV_COLOR_FORMAT_ARGB8888 },
+    .data = (const uint8_t *)k_pat_HSTRIP_px,
+    .data_size = sizeof(k_pat_HSTRIP_px),
+};
+static const lv_image_dsc_t k_pat_diag = {
+    .header = { .w = 10, .h = 10, .cf = LV_COLOR_FORMAT_ARGB8888 },
+    .data = (const uint8_t *)k_pat_DIAG_px,
+    .data_size = sizeof(k_pat_DIAG_px),
+};
+// 地形纹样查找(色弱第二编码):森林=点纹/田野=横纹/荒地=斜纹,其余素色
+static const lv_image_dsc_t *tile_pat(uint8_t t) {
+    switch ((dr_world_tile_t)t) {
+        case DR_WT_FOREST: return &k_pat_dots;
+        case DR_WT_FIELD:  return &k_pat_hstrip;
+        case DR_WT_BARREN: return &k_pat_diag;
+        default:           return NULL;
+    }
+}
+
 static uint32_t map_tile_color(uint8_t t, bool seen) {
     if (!seen) return COL_BG;                 // 迷雾
+    // 色弱适配(2026-10-05):全部色值经绿色盲模拟复核,易混组拉开亮度档
+    // (煤矿38/城市72/老屋107/铁矿112/硫矿137/你162/废镇180/村庄·哨站210);
+    // 三地形另叠纹样(点/横线/斜线)做第二编码,见 k_pat_*。
     switch ((dr_world_tile_t)t) {
         case DR_WT_VILLAGE:   return COL_GOLD;
-        case DR_WT_FOREST:    return 0x3B5323;
-        case DR_WT_FIELD:     return 0x77804A;
-        case DR_WT_BARREN:    return 0x6E5B3F;
-        case DR_WT_IRON:      return 0xAFAFBC;
-        case DR_WT_COAL:      return 0x40404A;
-        case DR_WT_SULPHUR:   return 0xC9C25B;
-        case DR_WT_OUTPOST:   return 0x5BC8C8;
-        case DR_WT_SHIP:      return 0xC85BC8;
-        case DR_WT_HOUSE:     return 0xC9A06B;
-        case DR_WT_CAVE:      return 0x6B7FC9;
-        case DR_WT_TOWN:      return 0xC96B8E;
-        case DR_WT_CITY:      return 0x8E6BC9;
+        case DR_WT_FOREST:    return 0x2E5E1E;
+        case DR_WT_FIELD:     return 0xC8B84B;
+        case DR_WT_BARREN:    return 0x967850;
+        case DR_WT_IRON:      return 0x707078;
+        case DR_WT_COAL:      return 0x26262E;
+        case DR_WT_SULPHUR:   return 0x9B8C34;
+        case DR_WT_OUTPOST:   return 0x9AE8E8;
+        case DR_WT_SHIP:      return 0xC060D8;
+        case DR_WT_HOUSE:     return 0x965F37;
+        case DR_WT_CAVE:      return 0x4B64BE;
+        case DR_WT_TOWN:      return 0xF29E9E;
+        case DR_WT_CITY:      return 0x5A3A90;
         default:              return COL_BG;
     }
 }
@@ -1146,6 +1219,8 @@ static void render_map(void) {
         bool seen = me || dr_world_seen(&s_world, cx, cy);
         lv_obj_set_style_bg_color(s_map[i],
             lv_color_hex(me ? COL_ME : map_tile_color(t, seen)), 0);
+        lv_obj_set_style_bg_image_src(s_map[i],
+            (!me && seen) ? tile_pat(t) : NULL, 0);
     }
     // 全量图例(地图右侧双列):颜色→含义钥匙
     for (int i = 0; i < LEG_KINDS; i++) {
@@ -2550,6 +2625,15 @@ void dr_debug_set_wild(uint8_t x, uint8_t y) {
     s.game.hero_hp = s.game.hero_hp_max = 10;
     s.game.hero_x = x; s.game.hero_y = y;
     s.game.res[DR_RES_FOOD] = 20;
+    // 点亮主角周围 9×9(纹样/地形截图验证需要视野内有内容)
+    for (int dy = -4; dy <= 4; dy++)
+        for (int dx = -4; dx <= 4; dx++) {
+            int cx = (int)x + dx, cy = (int)y + dy;
+            if (cx < 0 || cy < 0 || cx >= DR_WORLD_SIZE || cy >= DR_WORLD_SIZE)
+                continue;
+            uint32_t i = (uint32_t)cy * DR_WORLD_SIZE + cx;
+            s_world.seen[i / 8] |= (uint8_t)(1u << (i % 8));
+        }
     s.page = PG_MAP;
     s.focus = 0;
     s.dirty = true;
