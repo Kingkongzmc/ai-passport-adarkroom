@@ -24,6 +24,7 @@
 #include <string.h>
 
 #include "bsp_battery.h"
+#include "esp_heap_caps.h"
 #include "bsp_button.h"
 #include "bsp_display.h"
 #include "bsp_pins.h"
@@ -2204,6 +2205,17 @@ static void tick(lv_timer_t *t) {
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
 
     // 就地提示到期:清文字并还原提示行颜色,置脏触发整页重画恢复原提示
+    // TODO(诊断):双堆水位心跳(系统堆+LVGL 96KB 池),卡死取证后撤
+    static uint32_t s_heap_log_ms = 0;
+    if (now_ms - s_heap_log_ms >= 5000u) {
+        s_heap_log_ms = now_ms;
+        lv_mem_monitor_t mon;
+        lv_mem_monitor(&mon);
+        ESP_LOGI(TAG, "sys=%u lvpool=%u(%u%%) frag=%u page=%d",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
+                 (unsigned)(mon.free_size), (unsigned)mon.used_pct,
+                 (unsigned)mon.frag_pct, (int)s.page);
+    }
     if (s.toast[0] && (int32_t)(now_ms - s.toast_until_ms) >= 0) {
         s.toast[0] = '\0';
         lv_obj_set_style_text_color(s_hint, lv_color_hex(COL_DIM), 0);
