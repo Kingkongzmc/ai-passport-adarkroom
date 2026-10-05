@@ -98,6 +98,8 @@ static struct {
     int8_t outfit_adj;         // 出发整备:正在调配的物资(-1=无)
     bool screen_off;           // 熄屏态(背光 0,任意键唤醒并吞键,DESIGN §8.1)
     uint32_t last_input_ms;    // 最近一次真实按键(自动熄屏计时基准)
+    char toast[40];            // 就地结果提示(覆盖当前页提示行,到期还原)
+    uint32_t toast_until_ms;
     dr_game_t game;
     dr_rules_rt_t rules_rt;
     dr_event_session_t ev_sess;
@@ -156,6 +158,15 @@ static void log_push(const char *text) {
     else
         s_log_cnt++;
     snprintf(s_logs[s_log_cnt - 1], sizeof(s_logs[0]), "%s", text);
+    s.dirty = true;
+}
+
+// 就地结果提示:把当前页底部提示行覆盖为金色文字(约 2s,tick 到时还原)。
+// 与 log_push 并用——即时反馈进提示行,历史留主页日志。
+// 隐藏提示行的页面(主页有日志区/弹窗有正文)不显示,静默降级为仅日志。
+static void toast(const char *txt) {
+    snprintf(s.toast, sizeof(s.toast), "%s", txt);
+    s.toast_until_ms = (uint32_t)(esp_timer_get_time() / 1000) + 2000u;
     s.dirty = true;
 }
 
@@ -1496,6 +1507,12 @@ static void render(void) {
         case PG_CONFIRM: render_confirm(); break;
         case PG_CRAFT:   render_craft(); break;
     }
+    // 就地提示:渲染末覆盖提示行(仅对当前显示提示行的页面生效;
+    // 到期由 tick 清除并触发整页重画,恢复各页自己的提示文案与暗色)
+    if (s.toast[0] && !lv_obj_has_flag(s_hint, LV_OBJ_FLAG_HIDDEN)) {
+        lv_label_set_text(s_hint, s.toast);
+        lv_obj_set_style_text_color(s_hint, lv_color_hex(COL_GOLD), 0);
+    }
 }
 
 // ===================================================================
@@ -1674,10 +1691,14 @@ static void village_action(int idx) {
     if (idx == 0) {                           // 收集木材(60s;板车 +50)
         if ((int32_t)(s.rules_rt.gather_ready_ms - now_ms) > 0) {
             log_push("还需要等等才能再收集");
+            toast("还需要等等");
         } else {
             dr_rules_gather(&s.game, dr_port_now_ts());
             s.rules_rt.gather_ready_ms = now_ms + DR_GATHER_COOLDOWN_S * 1000u;
-            log_push(s.game.building_lv[DR_BLD_CART] > 0 ? "收集到 50 木" : "收集到 10 木");
+            const char *g = s.game.building_lv[DR_BLD_CART] > 0
+                          ? "收集到 50 木" : "收集到 10 木";
+            log_push(g);
+            toast(g);
             s.save_pending = true;
         }
         return;
@@ -1686,6 +1707,7 @@ static void village_action(int idx) {
         dr_trap_yield_t y;
         if (!dr_rules_trap_check(&s.rules_rt, &s.game, now_ms, &y)) {
             log_push("刚查过陷阱,再等等");
+            toast("刚查过,再等等");
         } else {
             char line[64];
             int n = snprintf(line, sizeof(line), "陷阱收获:");
@@ -1701,6 +1723,7 @@ static void village_action(int idx) {
             if (n > 0 && n < (int)sizeof(line) && y.bait)
                 snprintf(line + n, sizeof(line) - n, "(耗%u饵)", y.bait);
             log_push(line);
+            toast(line);
             s.save_pending = true;
         }
         return;
@@ -1716,11 +1739,14 @@ static void list_action(int idx) {
                 snprintf(line, sizeof(line), "建成 %s Lv%u", bld_short(idx),
                          s.game.building_lv[idx]);
                 log_push(line);
+                toast(line);
                 s.save_pending = true;
             } else if (s.game.temp_lv <= DR_TEMP_COLD) {
                 log_push("屋里太冷,先点火再建造");
+                toast("屋里太冷,先点火");
             } else {
                 log_push("材料不够");
+                toast("材料不够");
             }
             break;
         case PG_VILLAGE:
@@ -1730,9 +1756,11 @@ static void list_action(int idx) {
             {   // 行3..6:进入人数调节
                 int job = village_row_job(idx);
                 if (job < 0 || !dr_rules_job_unlocked(&s.game, (uint8_t)job)) {
-                    log_push(job == DR_JOB_TANNER ? "需先建制革坊" :
-                             job == DR_JOB_CHARCUTIER ? "需先建熏肉房" :
-                                                        "需先建猎人小屋");
+                    const char *m = job == DR_JOB_TANNER ? "需先建制革坊" :
+                                    job == DR_JOB_CHARCUTIER ? "需先建熏肉房" :
+                                                               "需先建猎人小屋";
+                    log_push(m);
+                    toast(m);
                 } else {
                     s.village_adj = (int8_t)job;   // 进入人数调节
                     s.dirty = true;
@@ -1753,6 +1781,7 @@ static void list_action(int idx) {
                 if (idx == 5) {                     // 出发远征(需已带干肉)
                     if ((int32_t)(now_ms - s.embark_cd_ms) < 0) {
                         log_push("歇一歇再出发");
+                        toast("歇一歇再出发");
                     } else if (dr_world_embark(&s_world, &s.game)) {
                         log_push("踏上尘土路");
                         // 焦点回"东"行:不重置会停在出发行位置(远征态=北行),
@@ -1761,6 +1790,7 @@ static void list_action(int idx) {
                         s.save_pending = true;
                     } else {
                         log_push("先整备干肉(库→带)");
+                        toast("先整备干肉");
                     }
                     break;
                 }
@@ -1866,8 +1896,8 @@ static void list_action(int idx) {
                     page_goto(PG_MAP);
                     break;
                 case DR_FIGHT_NONE:
-                    if (idx == 1) log_push("没有干肉了");
-                    if (idx == 2) log_push("没有药了");
+                    if (idx == 1) { log_push("没有干肉了"); toast("没有干肉了"); }
+                    if (idx == 2) { log_push("没有药了");   toast("没有药了"); }
                     break;
                 case DR_FIGHT_MISS:       log_push("挥空了"); break;
                 case DR_FIGHT_HIT:        log_push("命中!"); break;
@@ -1894,6 +1924,7 @@ static void list_action(int idx) {
                     char msg[80];
                     snprintf(msg, sizeof(msg), "搜到:%s", line);
                     log_push(msg);
+                    toast(msg);
                     s.save_pending = true;
                     break;
                 }
@@ -1906,8 +1937,8 @@ static void list_action(int idx) {
                     page_goto(PG_COMBAT);
                     break;
                 }
-                case DR_LOC_EMPTY:      log_push("这里被搜空了"); break;
-                case DR_LOC_NEED_TORCH: log_push("需要火把(工坊:1木1布)"); break;
+                case DR_LOC_EMPTY:      log_push("这里被搜空了"); toast("被搜空了"); break;
+                case DR_LOC_NEED_TORCH: log_push("需要火把(工坊:1木1布)"); toast("需要火把"); break;
                 default: break;
             }
             s.dirty = true;
@@ -1921,15 +1952,18 @@ static void list_action(int idx) {
             if (idx == DR_TRADE_COMPASS &&
                 (s.game.flags & ((uint64_t)1u << DR_FLAG_COMPASS))) {
                 log_push("已经有罗盘了");
+                toast("已经有罗盘了");
                 break;
             }
             if (dr_rules_trade_buy(&s.game, (uint8_t)idx)) {
                 char line[32];
                 snprintf(line, sizeof(line), "买到 %s", goods[idx]);
                 log_push(line);
+                toast(line);
                 s.save_pending = true;
             } else {
                 log_push("货款不够");
+                toast("货款不够");
             }
             break;
         }
@@ -1940,9 +1974,11 @@ static void list_action(int idx) {
                 char line[40];
                 snprintf(line, sizeof(line), "造成了 %s", craft_name(c));
                 log_push(line);
+                toast(line);
                 s.save_pending = true;
             } else {
                 log_push("材料不够或需要工坊");
+                toast("材料不够或需工坊");
             }
             break;
         }
@@ -1986,6 +2022,7 @@ static void handle_ok(void) {
             const dr_event_t *cur = &ev[s.ev_idx];
             if (!dr_event_choice_affordable(cur, (uint8_t)s.focus, &s.game)) {
                 log_push("身上的东西不够");   // 焦点跳过是第一道,这里兜底
+                toast("身上的东西不够");
                 break;
             }
             int16_t chain = dr_event_choose(ev, count, &s.game, &s.ev_sess,
@@ -2053,6 +2090,13 @@ static void check_event(void) {
 static void tick(lv_timer_t *t) {
     (void)t;
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+    // 就地提示到期:清文字并还原提示行颜色,置脏触发整页重画恢复原提示
+    if (s.toast[0] && (int32_t)(now_ms - s.toast_until_ms) >= 0) {
+        s.toast[0] = '\0';
+        lv_obj_set_style_text_color(s_hint, lv_color_hex(COL_DIM), 0);
+        s.dirty = true;
+    }
 
     static uint32_t last_batt_ms = 0;
     if (last_batt_ms == 0 || now_ms - last_batt_ms >= 30000u) {
@@ -2199,8 +2243,11 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                         (btn == BSP_BTN_DOWN) ? -1 : 0;
             if (d != 0) {
                 if (!dr_world_outfit_add(&s_world, &s.game,
-                                         outfit_res[s.outfit_adj], d))
-                    log_push(d > 0 ? "背袋满了或库存不足" : "已经没有携带了");
+                                         outfit_res[s.outfit_adj], d)) {
+                    const char *m = d > 0 ? "背袋满了或库存不足" : "已经没有携带了";
+                    log_push(m);
+                    toast(m);
+                }
                 s.save_pending = true;
                 s.dirty = true;
             }
@@ -2216,8 +2263,11 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             int16_t d = (btn == BSP_BTN_UP) ? 1 :
                         (btn == BSP_BTN_DOWN) ? -1 : 0;
             if (d != 0) {
-                if (!dr_rules_job_assign(&s.game, (uint8_t)s.village_adj, d))
-                    log_push(d > 0 ? "没有闲着的人了" : "这个岗位已经没人了");
+                if (!dr_rules_job_assign(&s.game, (uint8_t)s.village_adj, d)) {
+                    const char *m = d > 0 ? "没有闲着的人了" : "这个岗位已经没人了";
+                    log_push(m);
+                    toast(m);
+                }
                 s.save_pending = true;
                 s.dirty = true;
             }
@@ -2313,8 +2363,11 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                 }
             } else if (s.village_adj >= 0) {
                 int16_t d = (btn == BSP_BTN_UP) ? 5 : -5;
-                if (!dr_rules_job_assign(&s.game, (uint8_t)s.village_adj, d))
-                    log_push(d > 0 ? "没有闲着的人了" : "这个岗位已经没人了");
+                if (!dr_rules_job_assign(&s.game, (uint8_t)s.village_adj, d)) {
+                    const char *m = d > 0 ? "没有闲着的人了" : "这个岗位已经没人了";
+                    log_push(m);
+                    toast(m);
+                }
                 s.save_pending = true;
                 s.dirty = true;
             }
