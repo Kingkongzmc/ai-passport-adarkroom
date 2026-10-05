@@ -2621,10 +2621,10 @@ void darkroom_app_stop(void) {
 // 战斗页截图与断言(SIM_WILD)。
 void dr_debug_set_wild(uint8_t x, uint8_t y) {
     s.game.in_wilderness = 1;
-    s.game.food = 8; s.game.water = 8;
+    s.game.food = 30; s.game.water = 30;   // 长走位截图用(战斗触发需多步)
     s.game.hero_hp = s.game.hero_hp_max = 10;
     s.game.hero_x = x; s.game.hero_y = y;
-    s.game.res[DR_RES_FOOD] = 20;
+    s.game.res[DR_RES_FOOD] = 40;
     // 点亮主角周围 9×9(纹样/地形截图验证需要视野内有内容)
     for (int dy = -4; dy <= 4; dy++)
         for (int dx = -4; dx <= 4; dx++) {

@@ -25,8 +25,8 @@ FoloToy AI Passport(ESP32-C3,240×320 圆屏,三键)上的菜单式文字放置�
 | --- | --- | --- |
 | ![标题](docs/screenshots/01_title.png) | ![主页](docs/screenshots/02_home.png) | ![建造](docs/screenshots/03_build.png) |
 | 标题 | 主页(渐隐日志) | 建造(缺口提示) |
-| ![村庄](docs/screenshots/04_village.png) | ![荒野地图](docs/screenshots/05_map.png) | ![废村](docs/screenshots/06_ruin.png) |
-| 村庄(收入总览) | 荒野地图 | 废村 |
+| ![村庄](docs/screenshots/04_village.png) | ![荒野地图](docs/screenshots/05_map.png) | ![潮湿洞穴](docs/screenshots/06_ruin.png) |
+| 村庄(收入总览) | 荒野地图(全量图例+纹样) | 潮湿洞穴 |
 | ![战斗](docs/screenshots/07_combat.png) | ![贸易](docs/screenshots/08_trade.png) | ![设置](docs/screenshots/09_settings.png) |
 | 战斗 | 贸易 | 设置 |
 | ![事件](docs/screenshots/10_event.png) | ![确认](docs/screenshots/11_confirm.png) | |
