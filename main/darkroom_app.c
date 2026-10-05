@@ -248,6 +248,10 @@ static lv_obj_t *label_new(lv_obj_t *parent, const lv_font_t *font,
                            lv_color_t color, int x, int y, int w, int h) {
     lv_obj_t *l = lv_label_create(parent);
     lv_obj_set_pos(l, x, y);
+    // 固定高度不得低于字体行高:LV_LABEL_LONG_DOT 下内容塞不进固定高度会
+    // 触发"布局完成→重算文本"死循环,堆被逐轮 realloc 耗干后 lv_realloc
+    // 挂死(真机 2026-10-05"出发远征"卡死根因,dr_key 持锁连带全键失灵)
+    if (h < (int)font->line_height) h = font->line_height;
     lv_obj_set_size(l, w, h);
     lv_obj_set_style_text_font(l, font, 0);
     lv_obj_set_style_text_color(l, color, 0);
@@ -537,7 +541,7 @@ static void build_ui(void) {
             lv_obj_set_style_border_width(s_legchip[i], 0, 0);
             lv_obj_set_style_pad_all(s_legchip[i], 0, 0);
             s_legtxt[i] = label_new(s_content, &dr_font_12, lv_color_hex(COL_DIM),
-                                    x + 13, y, 26, 13);
+                                    x + 13, y, 26, 14);
             lv_label_set_text(s_legtxt[i], k_leg[i].name);
         }
     }
@@ -1205,7 +1209,7 @@ static void render_map(void) {
         lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_pos(s_hint, 0, 238);
         if (adj)
-            lv_label_set_text(s_hint, "上下=±1 长按=5/完成 确定=下一项");
+            lv_label_set_text(s_hint, "上下调整 长按=5/完成 确定下一项");
         else if (s.game.food == 0)
             lv_label_set_text(s_hint, "整备干肉后才能出发(库→带)");
         else
