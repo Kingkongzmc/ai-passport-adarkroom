@@ -177,17 +177,26 @@ static void write_bmp(const char *path) {
 // ---------------------------------------------------------------------------
 // 按键脚本 + 主循环
 // ---------------------------------------------------------------------------
-typedef struct { bsp_btn_t btn; int frame; } sim_key_t;
+typedef struct { bsp_btn_t btn; bsp_btn_ev_t ev; int frame; } sim_key_t;
 static sim_key_t s_keys[128]; static int s_key_count;
 
+// 键名小写=PRESS,大写(UP/DOWN/OK)=LONG(测长按路径:±5/返回/熄屏等)
 static void parse_keys(char *spec) {
     for (char *tok = strtok(spec, ","); tok; tok = strtok(NULL, ",")) {
         char name[16] = {0}; int frame = 0;
         if (sscanf(tok, "%15[^@]@%d", name, &frame) != 2) continue;
-        bsp_btn_t btn = strcmp(name, "up") == 0 ? BSP_BTN_UP :
-                        strcmp(name, "down") == 0 ? BSP_BTN_DOWN : BSP_BTN_OK;
+        bsp_btn_ev_t ev = BSP_BTN_PRESS;
+        bsp_btn_t btn;
+        if (strcmp(name, "up") == 0)    btn = BSP_BTN_UP;
+        else if (strcmp(name, "down") == 0) btn = BSP_BTN_DOWN;
+        else if (strcmp(name, "ok") == 0)    btn = BSP_BTN_OK;
+        else if (strcmp(name, "UP") == 0)    { btn = BSP_BTN_UP;    ev = BSP_BTN_LONG; }
+        else if (strcmp(name, "DOWN") == 0)  { btn = BSP_BTN_DOWN;  ev = BSP_BTN_LONG; }
+        else if (strcmp(name, "OK") == 0)    { btn = BSP_BTN_OK;    ev = BSP_BTN_LONG; }
+        else continue;
         if (s_key_count < 128) {
             s_keys[s_key_count].btn = btn;
+            s_keys[s_key_count].ev = ev;
             s_keys[s_key_count].frame = frame;
             s_key_count++;
         }
@@ -226,7 +235,7 @@ int main(int argc, char **argv) {
     for (int f = 0; f < frames; f++) {
         for (int k = 0; k < s_key_count; k++)
             if (s_keys[k].frame == f)
-                darkroom_app_key(s_keys[k].btn, BSP_BTN_PRESS);
+                darkroom_app_key(s_keys[k].btn, s_keys[k].ev);
         s_vtime_us += 30000;      // 每帧 30ms
         lv_tick_inc(30);
         if (getenv("SIM_VERBOSE")) { fprintf(stderr, "frame %d pre\n", f); fflush(stderr); }

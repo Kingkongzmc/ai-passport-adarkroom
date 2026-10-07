@@ -1248,6 +1248,12 @@ static void render_map(void) {
     // 危险警示:离家太远且无护甲 → "里"格文字变红(原 y306 提示行超出内容区永远不可见,I9)
     lv_obj_set_style_text_color(s_cells[3],
         lv_color_hex(dr_world_danger(&s.game) ? COL_ENEMY : COL_TEXT), 0);
+    // 断供警告:断水/断粮第一次警告只进主页日志,荒野页不可见 → 猝死无预感
+    // (2026-10-07 B 项)。警告态把"水"/"食"格文字变红,与"里"格同款模式。
+    lv_obj_set_style_text_color(s_cells[0],
+        lv_color_hex(s_world.warned_thirst ? COL_ENEMY : COL_TEXT), 0);
+    lv_obj_set_style_text_color(s_cells[1],
+        lv_color_hex(s_world.warned_hunger ? COL_ENEMY : COL_TEXT), 0);
 
     // 方向行:显示目标格(雾内显示"未知");行距 22,尾行止于 278
     static const int dirs[4][2] = { {1,0},{0,1},{-1,0},{0,-1} };
@@ -1931,6 +1937,7 @@ static void list_action(int idx) {
                     case DR_MOVE_WARN_HUNGER: log_push("饥饿来袭"); break;
                     case DR_MOVE_DEATH:
                         log_push("你倒在了荒野里,物资全失");
+                        toast("倒下了,物资全失");
                         s.embark_cd_ms = now_ms + 120u * 1000u;
                         s.save_pending = true;
                         break;
@@ -1999,6 +2006,7 @@ static void list_action(int idx) {
                     break;
                 case DR_FIGHT_LOSE:
                     log_push("你被它打倒了,物资全失");
+                    toast("战败,物资全失");
                     s.embark_cd_ms = (uint32_t)(esp_timer_get_time() / 1000) +
                                      120u * 1000u;
                     s.save_pending = true;
@@ -2340,13 +2348,41 @@ static bool nav_tab_enabled(int i) {
 }
 
 static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
-    if (ev != BSP_BTN_PRESS && ev != BSP_BTN_LONG) return;
+    if (ev != BSP_BTN_PRESS && ev != BSP_BTN_LONG && ev != BSP_BTN_HOLD) return;
     if (btn != BSP_BTN_UP && btn != BSP_BTN_DOWN && btn != BSP_BTN_OK) return;
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     if (now_ms - s.boot_ms < 1500u) return;  // 开机防抖
     s.last_input_ms = now_ms;                // 任何真实按键重置熄屏计时
     if (s.screen_off) {                      // 任意键唤醒,唤醒键吞掉不触发游戏动作
         screen_wake();
+        return;
+    }
+
+    // 连调:长按期间周期事件——调节态按住上/下自动步进(节流 ~10 步/s;
+    // 组件原始周期 20ms 过快)。其他场景忽略(翻页/确定不做连发)。
+    if (ev == BSP_BTN_HOLD) {
+        static uint32_t s_last_hold_ms = 0;
+        if (btn == BSP_BTN_OK) return;
+        if (now_ms - s_last_hold_ms < 100u) return;
+        s_last_hold_ms = now_ms;
+        if (s.page == PG_VILLAGE && s.village_adj >= 0) {
+            int16_t d = (btn == BSP_BTN_UP) ? 1 : -1;
+            (void)dr_rules_job_assign(&s.game, (uint8_t)s.village_adj, d);
+            s.save_pending = true;
+            s.dirty = true;
+            return;
+        }
+        if (s.page == PG_MAP && !s.game.in_wilderness && s.outfit_adj >= 0) {
+            static const uint8_t outfit_res[3] = {
+                DR_RES_FOOD, DR_RES_MEDICINE, DR_RES_BULLETS
+            };
+            int16_t d = (btn == BSP_BTN_UP) ? 1 : -1;
+            (void)dr_world_outfit_add(&s_world, &s.game,
+                                      outfit_res[s.outfit_adj], d);
+            s.save_pending = true;
+            s.dirty = true;
+            return;
+        }
         return;
     }
 
@@ -2477,13 +2513,16 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             handle_ok();
         }
     } else if (ev == BSP_BTN_LONG) {
-        // 村庄:长按确定=完成(不返回主页——PRESS 先进调节,长按返回必误触);
+        // 村庄:调节中长按确定=完成;非调节态长按确定=返回(与其他列表页一致,
+        // 2026-10-07 C 项:此前村庄是唯一不支持长按返回的列表页);
         // 调节中长按上/下 = ±5
         if (s.page == PG_VILLAGE) {
             if (btn == BSP_BTN_OK) {
                 if (s.village_adj >= 0) {
                     s.village_adj = -1;
                     s.dirty = true;
+                } else {
+                    page_goto(PG_HOME);
                 }
             } else if (s.village_adj >= 0) {
                 int16_t d = (btn == BSP_BTN_UP) ? 5 : -5;
@@ -2531,13 +2570,21 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             page_goto(PG_CONFIRM);
             return;
         }
-        // 长按返回;事件/战斗/确认页禁用(必须显式选择);村庄页不响应长按返回
+        // 长按返回;事件/战斗/确认页禁用(必须显式选择);远征中禁用
+        // (2026-10-07 A 项:此前远征中长按确定会瞬移回家——背包战利品
+        // 悬空、再出发被清袋,规则上远征只有走回村或战死两个出口)
         switch (s.page) {
             case PG_BUILD:
             case PG_TRADE:
             case PG_SETTINGS:
             case PG_CRAFT:
-            case PG_MAP:    page_goto(PG_HOME); break;
+            case PG_MAP:
+                if (s.game.in_wilderness) {
+                    toast("荒野中只能走回去");
+                    return;
+                }
+                page_goto(PG_HOME);
+                break;
             case PG_RUIN:   page_goto(PG_MAP);  break;
             default: break;
         }
