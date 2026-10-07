@@ -103,14 +103,25 @@ dr_event_result_t dr_event_poll(const dr_event_t *events, uint16_t count,
     return r;
 }
 
+// 选项代价是否付得起(UI 灰显/跳过焦点用;choose 内还会再核一次)。
+// avail_flag_clear:要求旗标未置位(原版按钮 available 的"已有则隐藏",
+// 设备形态取灰显等价);旗标代价(DR_COST_FLAG)要求已持有。
 bool dr_event_choice_affordable(const dr_event_t *e, uint8_t choice_idx,
                                 const dr_game_t *g) {
     if (e == NULL || choice_idx >= e->choice_count) return false;
-    for (int i = 0; i < 2; i++) {
-        uint8_t r = e->choices[choice_idx].cost_res[i];
-        if (r == 0xFF) continue;
+    const dr_event_choice_t *ch = &e->choices[choice_idx];
+    if (ch->avail_flag_clear != DR_COST_NONE &&
+        ((g->flags >> (ch->avail_flag_clear & 63u)) & 1u))
+        return false;
+    for (int i = 0; i < 3; i++) {
+        uint8_t r = ch->cost_res[i];
+        if (r == DR_COST_NONE) continue;
+        if (r == DR_COST_FLAG) {
+            if (!((g->flags >> (ch->cost_amt[i] & 63u)) & 1u)) return false;
+            continue;
+        }
         if (r >= DR_RES_KIND_COUNT) return false;
-        if (g->res[r] < e->choices[choice_idx].cost_amt[i]) return false;
+        if (g->res[r] < ch->cost_amt[i]) return false;
     }
     return true;
 }
@@ -174,6 +185,24 @@ static void eff_apply(const dr_eff_t *f, dr_game_t *g, dr_rng_t *rng,
             g->building_lv[f->arg1] = (uint8_t)(lv - loss);
             break;
         }
+        case DR_EFF_THIEF_HANG:
+            // 吊死窃贼(原版 global.js hang:thieves=2、停收入、追回 stolen)
+            g->thieves_lv = 2;
+            g->flags &= ~((uint64_t)1u << DR_FLAG_THIEF_ACTIVE);
+            g->res[DR_RES_WOOD] += g->stolen_wood;
+            g->res_total[DR_RES_WOOD] += g->stolen_wood;
+            g->res[DR_RES_FUR] += g->stolen_fur;
+            g->res_total[DR_RES_FUR] += g->stolen_fur;
+            g->res[DR_RES_MEAT] += g->stolen_meat;
+            g->res_total[DR_RES_MEAT] += g->stolen_meat;
+            g->stolen_wood = g->stolen_fur = g->stolen_meat = 0;
+            break;
+        case DR_EFF_THIEF_SPARE:
+            // 放过窃贼(原版 spare:thieves=2、停收入、addPerk stealthy)
+            g->thieves_lv = 2;
+            g->flags &= ~((uint64_t)1u << DR_FLAG_THIEF_ACTIVE);
+            g->flags |= (uint64_t)1u << DR_FLAG_PERK_STEALTHY;
+            break;
         case DR_EFF_NONE:
             break;
     }
@@ -189,10 +218,14 @@ int16_t dr_event_choose(const dr_event_t *events, uint16_t count,
     if (!dr_event_choice_affordable(e, choice_idx, g))
         return DR_EVENT_CHOOSE_REJECTED;
 
-    // 代价先扣(不足已在上面拦下)
-    for (int i = 0; i < 2; i++) {
+    // 代价先扣(不足已在上面拦下);旗标代价=清除(消耗品,如火把)
+    for (int i = 0; i < 3; i++) {
         uint8_t r = e->choices[choice_idx].cost_res[i];
-        if (r == 0xFF) continue;
+        if (r == DR_COST_NONE) continue;
+        if (r == DR_COST_FLAG) {
+            g->flags &= ~((uint64_t)1u << (e->choices[choice_idx].cost_amt[i] & 63u));
+            continue;
+        }
         g->res[r] -= e->choices[choice_idx].cost_amt[i];
     }
 

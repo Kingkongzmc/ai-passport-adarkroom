@@ -1,13 +1,14 @@
-// main/game_darkroom/dr_events_data.c —— 事件表(M6 灌装,切片一:村庄事件集)。
+// main/game_darkroom/dr_events_data.c —— 事件表(M6 灌装,切片一+切片二)。
 // 纯数据,无逻辑;文案引用 dr_text.h 的 id。
 // v3 起"陌生人"不再走事件对话框——对齐原版:陌生人(建造者)是规则层状态机
 // (晕倒→发抖→沉睡→帮忙,室温驱动,见 dr_rules.c),无玩家选择分支。
-// 取证:原版 script/events/room.js + events/outside.js(2026-10-04 jsdelivr),
-// 条件/概率/数值逐条对齐;离散化适配(减员数取中值、兑换改固定量)注明在
-// IMPLEMENTATION_STATUS M6 行。原版模块对应:Room→DR_SCENE_HOME,
-// Outside→DR_SCENE_VILLAGE。
-// 切片一未含:游牧商人(常驻商店形态)、斥候/宗师(Perk 体系)、窃贼
-//(偷木收入触发链)、军队突袭(需 cityCleared 旗标)——归切片二。
+// 取证:原版 script/events/room.js + events/outside.js + events/global.js
+// (2026-10-07 jsdelivr),条件/概率/数值逐条对齐;离散化适配(减员数取中值、
+// 兑换改固定量、地图揭示确定性化)注明在 IMPLEMENTATION_STATUS M6 行。
+// 原版模块对应:Room→DR_SCENE_HOME,Outside→DR_SCENE_VILLAGE,Global→HOME|VILLAGE。
+// 切片二:军队突袭(cityCleared 门)、游牧商人(5 选项/3 代价槽/自链常驻)、
+// 窃贼(规则层触发链+THIEF 效果码)、斥候/宗师(Perk 体系;
+// 斥候买地图的揭示由 UI 桥接 dr_world_apply_map——迷雾是会话态)。
 #include "dr_events.h"
 #include "dr_rules.h"   // DR_BLD_HUT/DR_BLD_TRAP 等建筑 id(条件引用)
 
@@ -19,21 +20,30 @@
 // 无代价选项(e0..e3 按需填 EFF_NONE;效果参数不加括号——E 宏展开为
 // 裸花括号组,包一层括号会被 GCC 当语句表达式)
 #define FREE_CH(txt, e0, e1, e2, e3)                                  \
-    { .text_id = (txt),                                               \
-      .cost_res = { 0xFF, 0xFF }, .cost_amt = { 0, 0 },               \
+    { .text_id = (txt), .avail_flag_clear = DR_COST_NONE,             \
+      .cost_res = { DR_COST_NONE, DR_COST_NONE, DR_COST_NONE },       \
+      .cost_amt = { 0, 0, 0 },                                        \
       .effects = { e0, e1, e2, e3 } }
 
 // 单资源代价选项
 #define COST_CH(txt, r1, a1, e0, e1, e2, e3)                          \
-    { .text_id = (txt),                                               \
-      .cost_res = { (uint8_t)(r1), 0xFF }, .cost_amt = { (a1), 0 },   \
+    { .text_id = (txt), .avail_flag_clear = DR_COST_NONE,             \
+      .cost_res = { (uint8_t)(r1), DR_COST_NONE, DR_COST_NONE },      \
+      .cost_amt = { (a1), 0, 0 },                                     \
       .effects = { e0, e1, e2, e3 } }
 
 // 双资源代价选项
 #define COST2_CH(txt, r1, a1, r2, a2, e0, e1, e2, e3)                 \
-    { .text_id = (txt),                                               \
-      .cost_res = { (uint8_t)(r1), (uint8_t)(r2) },                   \
-      .cost_amt = { (a1), (a2) },                                     \
+    { .text_id = (txt), .avail_flag_clear = DR_COST_NONE,             \
+      .cost_res = { (uint8_t)(r1), (uint8_t)(r2), DR_COST_NONE },     \
+      .cost_amt = { (a1), (a2), 0 },                                  \
+      .effects = { e0, e1, e2, e3 } }
+
+// 三资源代价选项(M6 切片二:游牧商人罗盘 / 斥候学侦查)
+#define COST3_CH(txt, r1, a1, r2, a2, r3, a3, e0, e1, e2, e3)         \
+    { .text_id = (txt), .avail_flag_clear = DR_COST_NONE,             \
+      .cost_res = { (uint8_t)(r1), (uint8_t)(r2), (uint8_t)(r3) },    \
+      .cost_amt = { (a1), (a2), (a3) },                               \
       .effects = { e0, e1, e2, e3 } }
 
 // 表项下标(链式跳转引用;变更顺序须同步)
@@ -50,6 +60,12 @@ enum {
     DR_EV_SICK, DR_EV_SICK_HEALED, DR_EV_SICK_DEATH,
     DR_EV_PLAGUE, DR_EV_PLAGUE_KEPT, DR_EV_PLAGUE_RAGE,
     DR_EV_BEAST,
+    // ---- 切片二 ----
+    DR_EV_RAID,
+    DR_EV_NOMAD,
+    DR_EV_THIEF, DR_EV_THIEF_HANGED, DR_EV_THIEF_SPARED,
+    DR_EV_SCOUT,
+    DR_EV_MASTER, DR_EV_MASTER_AGREE,
 };
 
 static const dr_event_t k_events[] = {
@@ -530,6 +546,171 @@ static const dr_event_t k_events[] = {
                 E(DR_EFF_RES_ADD, DR_RES_TEETH, 10)),
         },
         .choice_count = 1,
+    },
+
+    // ==================== 切片二 ====================
+
+    // ---- 军队突袭(outside.js A Military Raid:pop>0 且城市清剿完成;
+    //      减员 20(原版 1..40 随机,取中值),得 子弹10/干肉50) ----
+    [DR_EV_RAID] = {
+        .text_id = DR_T_EV_RAID, .scene_mask = DR_SCENE_VILLAGE,
+        .priority = 10, .cooldown_s = 600,
+        .conds = { C(DR_COND_POP_GE, 0, 1),
+                   C(DR_COND_FLAG_SET, DR_FLAG_CITY_CLEARED, 0),
+                   COND_NONE, COND_NONE },
+        .choices = {
+            FREE_CH(DR_T_EV_BEAST_C0,
+                E(DR_EFF_POP_ADD, 0, -20),
+                E(DR_EFF_RES_ADD, DR_RES_BULLETS, 10),
+                E(DR_EFF_RES_ADD, DR_RES_FOOD, 50),
+                EFF_NONE),
+        },
+        .choice_count = 1,
+    },
+
+    // ---- 游牧商人(room.js The Nomad:有毛皮即可遇;鳞100毛/牙200毛/
+    //      饵5毛/罗盘300毛+15鳞+5牙(已有则灰)/告别。原版买完商店不关,
+    //      引擎对话框选择后即结束——GOTO 链回自身=商店常驻的等效形态;
+    //      罗盘与贸易站同旗标,两处任购其一即另一处作废) ----
+    [DR_EV_NOMAD] = {
+        .text_id = DR_T_EV_NOMAD, .scene_mask = DR_SCENE_HOME,
+        .priority = 10, .cooldown_s = 300,
+        .conds = { C(DR_COND_RES_GE, DR_RES_FUR, 1), COND_NONE, COND_NONE, COND_NONE },
+        .choices = {
+            COST_CH(DR_T_EV_NOMAD_SCALES, DR_RES_FUR, 100,
+                E(DR_EFF_RES_ADD, DR_RES_SCALES, 1),
+                E(DR_EFF_GOTO_EVENT, DR_EV_NOMAD, 0),
+                EFF_NONE, EFF_NONE),
+            COST_CH(DR_T_EV_NOMAD_TEETH, DR_RES_FUR, 200,
+                E(DR_EFF_RES_ADD, DR_RES_TEETH, 1),
+                E(DR_EFF_GOTO_EVENT, DR_EV_NOMAD, 0),
+                EFF_NONE, EFF_NONE),
+            COST_CH(DR_T_EV_NOMAD_BAIT, DR_RES_FUR, 5,
+                E(DR_EFF_RES_ADD, DR_RES_BAIT, 1),
+                E(DR_EFF_GOTO_EVENT, DR_EV_NOMAD, 0),
+                EFF_NONE, EFF_NONE),
+            { .text_id = DR_T_EV_NOMAD_COMPASS,
+              .avail_flag_clear = DR_FLAG_COMPASS,
+              .cost_res = { DR_RES_FUR, DR_RES_SCALES, DR_RES_TEETH },
+              .cost_amt = { 300, 15, 5 },
+              .effects = { E(DR_EFF_FLAG_SET, DR_FLAG_COMPASS, 0),
+                           E(DR_EFF_GOTO_EVENT, DR_EV_NOMAD, 0),
+                           EFF_NONE, EFF_NONE } },
+            FREE_CH(DR_T_EV_GOODBYE, EFF_NONE, EFF_NONE, EFF_NONE, EFF_NONE),
+        },
+        .choice_count = 5,
+    },
+
+    // ---- 窃贼(global.js The Thief + state_manager startThieves:
+    //      规则层触发(任意储量>5000+罗盘,见 dr_rules.c),thieves=1 时可遇
+    //      (小屋/村庄);吊死=追回全部被偷物资,放过=得潜行 Perk,两者都
+    //      停止偷窃。max_seen=1:解决即终局 ----
+    [DR_EV_THIEF] = {
+        .text_id = DR_T_EV_THIEF,
+        .scene_mask = DR_SCENE_HOME | DR_SCENE_VILLAGE,
+        .priority = 10, .max_seen = 1, .cooldown_s = 0,
+        .conds = { C(DR_COND_FLAG_SET, DR_FLAG_THIEF_ACTIVE, 0),
+                   COND_NONE, COND_NONE, COND_NONE },
+        .choices = {
+            FREE_CH(DR_T_EV_THIEF_HANG,
+                E(DR_EFF_THIEF_HANG, 0, 0),
+                E(DR_EFF_GOTO_EVENT, DR_EV_THIEF_HANGED, 0),
+                EFF_NONE, EFF_NONE),
+            FREE_CH(DR_T_EV_THIEF_SPARE,
+                E(DR_EFF_THIEF_SPARE, 0, 0),
+                E(DR_EFF_GOTO_EVENT, DR_EV_THIEF_SPARED, 0),
+                EFF_NONE, EFF_NONE),
+        },
+        .choice_count = 2,
+    },
+    [DR_EV_THIEF_HANGED] = {
+        .text_id = DR_T_EV_THIEF_HANGED, .scene_mask = 0,
+        .priority = 0, .cooldown_s = 0,
+        .conds = { COND_NONE, COND_NONE, COND_NONE, COND_NONE },
+        .choices = {
+            FREE_CH(DR_T_UI_BACK, EFF_NONE, EFF_NONE, EFF_NONE, EFF_NONE),
+        },
+        .choice_count = 1,
+    },
+    [DR_EV_THIEF_SPARED] = {
+        .text_id = DR_T_EV_THIEF_SPARED, .scene_mask = 0,
+        .priority = 0, .cooldown_s = 0,
+        .conds = { COND_NONE, COND_NONE, COND_NONE, COND_NONE },
+        .choices = {
+            FREE_CH(DR_T_UI_BACK, EFF_NONE, EFF_NONE, EFF_NONE, EFF_NONE),
+        },
+        .choice_count = 1,
+    },
+
+    // ---- 斥候(room.js The Scout:世界已解锁(罗盘)时可遇。买地图
+    //      200毛+10鳞——揭示由 UI 桥接 dr_world_apply_map(迷雾是会话态,
+    //      不在存档引擎辖域;无可揭时 UI 侧灰显不扣钱);学侦查 1000毛+
+    //      50鳞+20牙 → 斥候 Perk(揭示半径翻倍+开机确定性揭示一片) ----
+    [DR_EV_SCOUT] = {
+        .text_id = DR_T_EV_SCOUT, .scene_mask = DR_SCENE_HOME,
+        .priority = 10, .cooldown_s = 600,
+        .conds = { C(DR_COND_FLAG_SET, DR_FLAG_COMPASS, 0),
+                   COND_NONE, COND_NONE, COND_NONE },
+        .choices = {
+            COST2_CH(DR_T_EV_SCOUT_MAP, DR_RES_FUR, 200, DR_RES_SCALES, 10,
+                EFF_NONE, EFF_NONE, EFF_NONE, EFF_NONE),
+            { .text_id = DR_T_EV_SCOUT_LEARN,
+              .avail_flag_clear = DR_FLAG_PERK_SCOUT,
+              .cost_res = { DR_RES_FUR, DR_RES_SCALES, DR_RES_TEETH },
+              .cost_amt = { 1000, 50, 20 },
+              .effects = { E(DR_EFF_FLAG_SET, DR_FLAG_PERK_SCOUT, 0),
+                           EFF_NONE, EFF_NONE, EFF_NONE } },
+            FREE_CH(DR_T_EV_GOODBYE, EFF_NONE, EFF_NONE, EFF_NONE, EFF_NONE),
+        },
+        .choice_count = 3,
+    },
+
+    // ---- 宗师(room.js The Wandering Master:世界已解锁时可遇;宿泊费
+    //      干肉100+毛100+火把1(旗标代价)换一堂课,三选一 Perk,
+    //      已学的灰显(原版 available 隐藏) ----
+    [DR_EV_MASTER] = {
+        .text_id = DR_T_EV_MASTER, .scene_mask = DR_SCENE_HOME,
+        .priority = 10, .cooldown_s = 600,
+        .conds = { C(DR_COND_FLAG_SET, DR_FLAG_COMPASS, 0),
+                   COND_NONE, COND_NONE, COND_NONE },
+        .choices = {
+            { .text_id = DR_T_EV_MASTER_AGREE,
+              .avail_flag_clear = DR_COST_NONE,
+              .cost_res = { DR_RES_FOOD, DR_RES_FUR, DR_COST_FLAG },
+              .cost_amt = { 100, 100, DR_FLAG_TORCH },
+              .effects = { E(DR_EFF_GOTO_EVENT, DR_EV_MASTER_AGREE, 0),
+                           EFF_NONE, EFF_NONE, EFF_NONE } },
+            FREE_CH(DR_T_EV_SEND_AWAY, EFF_NONE, EFF_NONE, EFF_NONE, EFF_NONE),
+        },
+        .choice_count = 2,
+    },
+    [DR_EV_MASTER_AGREE] = {
+        .text_id = DR_T_EV_MASTER_ROOM, .scene_mask = 0,
+        .priority = 0, .cooldown_s = 0,
+        .conds = { COND_NONE, COND_NONE, COND_NONE, COND_NONE },
+        .choices = {
+            { .text_id = DR_T_EV_MASTER_EVASION,
+              .avail_flag_clear = DR_FLAG_PERK_EVASIVE,
+              .cost_res = { DR_COST_NONE, DR_COST_NONE, DR_COST_NONE },
+              .cost_amt = { 0, 0, 0 },
+              .effects = { E(DR_EFF_FLAG_SET, DR_FLAG_PERK_EVASIVE, 0),
+                           EFF_NONE, EFF_NONE, EFF_NONE } },
+            { .text_id = DR_T_EV_MASTER_PRECISION,
+              .avail_flag_clear = DR_FLAG_PERK_PRECISE,
+              .cost_res = { DR_COST_NONE, DR_COST_NONE, DR_COST_NONE },
+              .cost_amt = { 0, 0, 0 },
+              .effects = { E(DR_EFF_FLAG_SET, DR_FLAG_PERK_PRECISE, 0),
+                           EFF_NONE, EFF_NONE, EFF_NONE } },
+            { .text_id = DR_T_EV_MASTER_FORCE,
+              .avail_flag_clear = DR_FLAG_PERK_BARBARIAN,
+              .cost_res = { DR_COST_NONE, DR_COST_NONE, DR_COST_NONE },
+              .cost_amt = { 0, 0, 0 },
+              .effects = { E(DR_EFF_FLAG_SET, DR_FLAG_PERK_BARBARIAN, 0),
+                           EFF_NONE, EFF_NONE, EFF_NONE } },
+            FREE_CH(DR_T_EV_MASTER_NOTHING, EFF_NONE, EFF_NONE, EFF_NONE,
+                    EFF_NONE),
+        },
+        .choice_count = 4,
     },
 };
 

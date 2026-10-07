@@ -60,6 +60,22 @@ enum {
     DR_T_EV_PLAGUE, DR_T_EV_PLAGUE_KEPT, DR_T_EV_PLAGUE_RAGE,
     // 野兽袭击(A Beast Attack:减员 5,得毛/肉/牙)
     DR_T_EV_BEAST, DR_T_EV_BEAST_C0,
+
+    // ---- M6 切片二 ----
+    // 军队突袭(A Military Raid:城市清剿后;减员 20,得子弹/干肉)
+    DR_T_EV_RAID,
+    // 游牧商人(The Nomad:商店常驻;鳞/牙/饵/罗盘/告别)
+    DR_T_EV_NOMAD, DR_T_EV_NOMAD_SCALES, DR_T_EV_NOMAD_TEETH,
+    DR_T_EV_NOMAD_BAIT, DR_T_EV_NOMAD_COMPASS, DR_T_EV_GOODBYE,
+    // 窃贼(The Thief:吊死追回赃物/放过得潜行 Perk)
+    DR_T_EV_THIEF, DR_T_EV_THIEF_HANG, DR_T_EV_THIEF_HANGED,
+    DR_T_EV_THIEF_SPARE, DR_T_EV_THIEF_SPARED,
+    // 斥候(The Scout:买地图/学侦查)
+    DR_T_EV_SCOUT, DR_T_EV_SCOUT_MAP, DR_T_EV_SCOUT_LEARN,
+    // 宗师(The Wandering Master:宿泊费换三选一 Perk)
+    DR_T_EV_MASTER, DR_T_EV_MASTER_AGREE, DR_T_EV_MASTER_ROOM,
+    DR_T_EV_MASTER_EVASION, DR_T_EV_MASTER_PRECISION, DR_T_EV_MASTER_FORCE,
+    DR_T_EV_MASTER_NOTHING,
 };
 
 const char *dr_text(uint16_t id);

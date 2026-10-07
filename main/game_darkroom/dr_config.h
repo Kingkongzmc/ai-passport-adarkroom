@@ -11,7 +11,7 @@ extern "C" {
 #endif
 
 // ---- 存档 ----
-#define DR_SAVE_VERSION   4u      // 存档结构版本,迁移见 dr_state.h
+#define DR_SAVE_VERSION   5u      // 存档结构版本,迁移见 dr_state.h(v5:窃贼)
 #define DR_SAVE_NVS_KEY   "dr_save"
 #define DR_FLAG_BITS      64      // 剧情标记位数(事件表引用 0..63)
 
@@ -27,6 +27,14 @@ extern "C" {
 #define DR_FLAG_WAGON        11u   // 篷车:背袋 +30
 #define DR_FLAG_CONVOY       12u   // 车队:背袋 +60
 #define DR_FLAG_TORCH        13u   // 火把:探索洞穴用(1木+1布,消耗品)
+// M6 切片二(空位 14 起;Perk 以旗标持久,原版 $SM.hasPerk 同义)
+#define DR_FLAG_CITY_CLEARED    14u  // 城市地点搜剿胜利(原版 game.cityCleared)
+#define DR_FLAG_PERK_SCOUT      15u  // 侦查:揭示半径翻倍+开机确定性揭示一片
+#define DR_FLAG_PERK_EVASIVE    16u  // 闪避:敌方命中 ×0.8(原版 events.js)
+#define DR_FLAG_PERK_PRECISE    17u  // 精准:玩家命中 +10%(原版 getHitChance)
+#define DR_FLAG_PERK_BARBARIAN  18u  // 蛮力:近战伤害 ×1.5 向下取整(原版)
+#define DR_FLAG_PERK_STEALTHY   19u  // 潜行:遭遇触发率减半(原版 FIGHT_CHANCE)
+#define DR_FLAG_THIEF_ACTIVE    20u  // 窃贼进行中(解决时清除;事件轮询门)
 
 // ---- 资源(原版 stores;布局红线:只在尾部追加,不得中间插入) ----
 typedef enum {
@@ -63,7 +71,7 @@ typedef enum {
 
 // ---- 事件系统 ----
 #define DR_EVENT_MAX_CONDS 4      // 每个事件最多触发条件(与)
-#define DR_EVENT_MAX_CHOICES 4    // 每个事件最多选项
+#define DR_EVENT_MAX_CHOICES 5    // 每个事件最多选项(M6 切片二:游牧商人 5)
 #define DR_EVENT_COOLDOWN_MAX_S  (30u * 86400u)  // 冷却上限 30 天,防溢出
 
 #ifdef __cplusplus

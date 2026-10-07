@@ -71,6 +71,12 @@ typedef struct {
 
     // v4 尾插(M4 远征)。
     uint8_t  weapon_lv;                 // 武器:0拳 1骨矛 2铁剑 3钢剑 4步枪(工坊制造,切片三)
+
+    // v5 尾插(M6 切片二:窃贼,原版 game.thieves + game.stolen)。
+    uint8_t  thieves_lv;                // 0=未触发 1=偷窃中 2=已了结(吊死/放过)
+    uint32_t stolen_wood;               // 被偷走的木材(吊死窃贼时全数追回)
+    uint32_t stolen_fur;
+    uint32_t stolen_meat;
 } dr_game_t;
 
 #pragma pack(push, 1)
@@ -101,6 +107,7 @@ bool dr_state_load(const void *blob, size_t len, dr_game_t *out);
 size_t dr_state_pack_v1(const dr_game_t *g, void *out, size_t outsz);
 size_t dr_state_pack_v2(const dr_game_t *g, void *out, size_t outsz);
 size_t dr_state_pack_v3(const dr_game_t *g, void *out, size_t outsz);
+size_t dr_state_pack_v4(const dr_game_t *g, void *out, size_t outsz);
 
 // 离线结算(M2 起接产出表;M1 提供时间钳制口径):
 //   delta_s = now_ts - g->saved_at_ts

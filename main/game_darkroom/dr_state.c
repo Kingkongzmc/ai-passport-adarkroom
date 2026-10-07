@@ -12,7 +12,8 @@
 //            职业枚举 LUMBER=0,HUNTER=1,TANNER=2,SMITH=3。
 // v3(原版对齐重做版):res 17 槽(+鳞/牙/布),尾插 temp_lv/builder_lv;
 //            职业枚举重排 HUNTER=0,TRAPPER=1,TANNER=2,CHARCUTIER=3。
-// v4(当前):  res 18 槽(+药),尾插 weapon_lv。
+// v4(M4 远征):  res 18 槽(+药),尾插 weapon_lv。
+// v5(当前):    尾插 thieves_lv/stolen_wood/fur/meat(M6 切片二:窃贼)。
 // 改当前结构时不要动这里。
 #pragma pack(push, 1)
 typedef struct {
@@ -84,6 +85,31 @@ typedef struct {
     uint8_t  builder_lv;
 } dr_game_v3_t;
 
+// v5(当前) = v4(当前结构去掉尾部窃贼三段;M6 切片二冻结)纯尾插。
+typedef struct {
+    uint32_t saved_at_ts;
+    uint32_t res[18];
+    uint32_t res_total[18];
+    uint16_t population;
+    uint16_t job[16];
+    uint8_t  building_lv[40];
+    uint16_t event_count[128];
+    uint64_t flags;
+    uint32_t rng_seed_state;
+    uint8_t  fire_lv;
+    uint16_t map_seed;
+    uint8_t  hero_x, hero_y;
+    uint8_t  hero_hp, hero_hp_max;
+    uint8_t  in_wilderness;
+    uint8_t  water, food;
+    uint8_t  armor_lv;
+    uint8_t  trap_bait_on;
+    uint8_t  _rsv[2];
+    uint8_t  temp_lv;
+    uint8_t  builder_lv;
+    uint8_t  weapon_lv;
+} dr_game_v4_t;
+
 _Static_assert(sizeof(dr_game_v1_t) == 460u, "v1 body size must stay frozen");
 _Static_assert(sizeof(dr_game_v2_t) == 480u, "v2 body size must stay frozen(自然对齐)");
 _Static_assert(sizeof(dr_game_v3_t) == 504u, "v3 body size must stay frozen(自然对齐)");
@@ -146,6 +172,38 @@ static void migrate_v3_to_v4(const dr_game_v3_t *v3, dr_game_t *out) {
     out->temp_lv = v3->temp_lv;
     out->builder_lv = v3->builder_lv;
     out->weapon_lv = 0;           // v4 新增:拳
+    // v5 新增(窃贼):memset 已清零——老档从未见过窃贼
+}
+
+// v4 → v5:纯尾插(窃贼三段),前缀逐字段照搬,新字段零初始化。
+static void migrate_v4_to_v5(const dr_game_v4_t *v4, dr_game_t *out) {
+    memset(out, 0, sizeof(*out));
+    out->saved_at_ts = v4->saved_at_ts;
+    memcpy(out->res, v4->res, sizeof(v4->res));
+    memcpy(out->res_total, v4->res_total, sizeof(v4->res_total));
+    out->population = v4->population;
+    memcpy(out->job, v4->job, sizeof(v4->job));
+    memcpy(out->building_lv, v4->building_lv, sizeof(v4->building_lv));
+    memcpy(out->event_count, v4->event_count, sizeof(v4->event_count));
+    out->flags = v4->flags;
+    out->rng_seed_state = v4->rng_seed_state;
+    out->fire_lv = v4->fire_lv;
+    out->map_seed = v4->map_seed;
+    out->hero_x = v4->hero_x;
+    out->hero_y = v4->hero_y;
+    out->hero_hp = v4->hero_hp;
+    out->hero_hp_max = v4->hero_hp_max;
+    out->in_wilderness = v4->in_wilderness;
+    out->water = v4->water;
+    out->food = v4->food;
+    out->armor_lv = v4->armor_lv;
+    out->trap_bait_on = 0;
+    out->_rsv[0] = v4->_rsv[0];
+    out->_rsv[1] = v4->_rsv[1];
+    out->temp_lv = v4->temp_lv;
+    out->builder_lv = v4->builder_lv;
+    out->weapon_lv = v4->weapon_lv;
+    // thieves_lv/stolen_* 保持 0:v4 及更早的档从未触发过窃贼
 }
 
 // v2(14 槽/旧职业枚举)→ v3:资源尾插补零;职业按下标重映射
@@ -183,7 +241,7 @@ static void migrate_v2_to_v3(const dr_game_v2_t *v2, dr_game_v3_t *out) {
         out->flags |= (uint64_t)1u << 2;   // DR_FLAG_FOREST
 }
 
-// v1(13 槽)→ v4:先按 v2 口径搬运,再走 v2→v3→v4 迁移链。
+// v1(13 槽)→ 当前:先按 v2 口径搬运,再走 v2→v3→v4→v5 迁移链。
 static void migrate_v1_to_v4(const dr_game_v1_t *v1, dr_game_t *out) {
     dr_game_v2_t v2;
     memset(&v2, 0, sizeof(v2));
@@ -228,11 +286,18 @@ bool dr_state_load(const void *blob, size_t len, dr_game_t *out) {
         *out = *(const dr_game_t *)(const void *)body;
         return true;
     }
+    if (hdr->version == 4) {
+        if (body_len != sizeof(dr_game_v4_t)) return false;
+        dr_game_v4_t v4;
+        memcpy(&v4, body, sizeof(v4));
+        migrate_v4_to_v5(&v4, out);
+        return true;
+    }
     if (hdr->version == 3) {
         if (body_len != sizeof(dr_game_v3_t)) return false;
         dr_game_v3_t v3;
         memcpy(&v3, body, sizeof(v3));
-        migrate_v3_to_v4(&v3, out);
+        migrate_v3_to_v4(&v3, out);   // 逐字段写入当前结构,新字段清零
         return true;
     }
     if (hdr->version == 2) {
@@ -364,6 +429,45 @@ size_t dr_state_pack_v3(const dr_game_t *g, void *out, size_t outsz) {
     hdr->_pad = 0;
     hdr->body_crc = dr_crc32(&v3, sizeof(v3));
     memcpy((uint8_t *)out + sizeof(dr_save_hdr_t), &v3, sizeof(v3));
+    return need;
+}
+
+size_t dr_state_pack_v4(const dr_game_t *g, void *out, size_t outsz) {
+    size_t need = sizeof(dr_save_hdr_t) + sizeof(dr_game_v4_t);
+    if (!g || !out || outsz < need) return 0;
+    dr_game_v4_t v4;
+    memset(&v4, 0, sizeof(v4));
+    v4.saved_at_ts = g->saved_at_ts;
+    memcpy(v4.res, g->res, sizeof(v4.res));
+    memcpy(v4.res_total, g->res_total, sizeof(v4.res_total));
+    v4.population = g->population;
+    memcpy(v4.job, g->job, sizeof(v4.job));
+    memcpy(v4.building_lv, g->building_lv, sizeof(v4.building_lv));
+    memcpy(v4.event_count, g->event_count, sizeof(v4.event_count));
+    v4.flags = g->flags;
+    v4.rng_seed_state = g->rng_seed_state;
+    v4.fire_lv = g->fire_lv;
+    v4.map_seed = g->map_seed;
+    v4.hero_x = g->hero_x;
+    v4.hero_y = g->hero_y;
+    v4.hero_hp = g->hero_hp;
+    v4.hero_hp_max = g->hero_hp_max;
+    v4.in_wilderness = g->in_wilderness;
+    v4.water = g->water;
+    v4.food = g->food;
+    v4.armor_lv = g->armor_lv;
+    v4.trap_bait_on = 0;
+    v4._rsv[0] = g->_rsv[0];
+    v4._rsv[1] = g->_rsv[1];
+    v4.temp_lv = g->temp_lv;
+    v4.builder_lv = g->builder_lv;
+    v4.weapon_lv = g->weapon_lv;
+    dr_save_hdr_t *hdr = (dr_save_hdr_t *)out;
+    hdr->magic = DR_SAVE_MAGIC;
+    hdr->version = 4;
+    hdr->_pad = 0;
+    hdr->body_crc = dr_crc32(&v4, sizeof(v4));
+    memcpy((uint8_t *)out + sizeof(dr_save_hdr_t), &v4, sizeof(v4));
     return need;
 }
 

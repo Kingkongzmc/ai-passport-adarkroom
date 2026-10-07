@@ -213,7 +213,31 @@ bool dr_rules_job_assign(dr_game_t *g, uint8_t job, int16_t delta) {
 // 猎人 0.5 毛 0.5 肉:用隔 tick 相位实现半速率(每 2 tick 产 1 次,均值即 0.5)。
 typedef struct {
     uint32_t wood, fur, meat, leather, food;   // 毛产出(不含职业自身消耗)
+    uint32_t stolen_wood, stolen_fur, stolen_meat;   // 窃贼本次偷走(实际到手)
 } dr_income_out_t;
+
+// 窃贼收入(原版 setIncome('thieves') wood-10/fur-5/meat-5,每 10s 一拍,
+// 与村庄收入同节拍;在线 tick 与离线补算共用本函数=同口径)。原版 addStolen
+// 只把"实际偷到的"记进 game.stolen——本作同义:存量不足时按余量计,存量钳 0。
+static void thieves_step(dr_game_t *g, dr_income_out_t *out) {
+    if (g->thieves_lv != 1) return;
+    struct {
+        uint8_t res; uint16_t rate;
+        uint32_t *save_acc;   // g->stolen_*(吊死窃贼时追回的口径)
+        uint32_t *out_acc;    // 本拍汇报(离线日志用)
+    } take[3] = {
+        { DR_RES_WOOD, 10, &g->stolen_wood, &out->stolen_wood },
+        { DR_RES_FUR,   5, &g->stolen_fur,  &out->stolen_fur },
+        { DR_RES_MEAT,  5, &g->stolen_meat, &out->stolen_meat },
+    };
+    for (int i = 0; i < 3; i++) {
+        uint32_t got = (g->res[take[i].res] < take[i].rate)
+                           ? g->res[take[i].res] : take[i].rate;
+        g->res[take[i].res] -= got;
+        *take[i].save_acc += got;
+        *take[i].out_acc += got;
+    }
+}
 
 static void income_step(dr_rules_rt_t *rt, dr_game_t *g, dr_income_out_t *out) {
     memset(out, 0, sizeof(*out));
@@ -290,6 +314,8 @@ static void income_step(dr_rules_rt_t *rt, dr_game_t *g, dr_income_out_t *out) {
     g->res[DR_RES_MEAT] += meat;   g->res_total[DR_RES_MEAT] += meat;
     out->wood = wood; out->fur = fur; out->meat = meat;
     out->leather = leather; out->food = food;
+
+    thieves_step(g, out);   // 窃贼每拍抽成(原版 income.thieves 同节拍)
 }
 
 // ---- 陷阱掉落(原版 checkTraps 六档累积表) ----
@@ -632,6 +658,21 @@ bool dr_rules_tick(dr_rules_rt_t *rt, dr_game_t *g, uint32_t now_ms,
             changed = true;
         }
     }
+
+    // 窃贼入场(原版 room.js updateStoresView:任意储量 >5000 且世界已解锁
+    // (本作=罗盘)且从未触发过 → startThieves;触发过一次即永不重复)
+    if (g->thieves_lv == 0 &&
+        (g->flags & ((uint64_t)1u << DR_FLAG_COMPASS))) {
+        for (int i = 0; i < DR_RES_KIND_COUNT; i++) {
+            if (g->res[i] > 5000u) {
+                g->thieves_lv = 1;
+                g->flags |= (uint64_t)1u << DR_FLAG_THIEF_ACTIVE;
+                if (out_ev) *out_ev = DR_RT_EV_THIEF_START;
+                changed = true;
+                break;
+            }
+        }
+    }
     return changed;
 }
 
@@ -640,7 +681,8 @@ uint32_t dr_rules_offline_settle(dr_rules_rt_t *rt, dr_game_t *g,
                                  uint32_t now_ts_s, uint32_t now_ms,
                                  dr_offline_yield_t *y) {
     (void)now_ms;
-    dr_offline_yield_t zero = {0, 0, 0, 0, 0, 0, false};
+    dr_offline_yield_t zero;
+    memset(&zero, 0, sizeof(zero));
     if (y) *y = zero;
     if (now_ts_s < g->saved_at_ts) {
         g->saved_at_ts = now_ts_s;          // 时钟回拨:锚定当下
@@ -655,7 +697,8 @@ uint32_t dr_rules_offline_settle(dr_rules_rt_t *rt, dr_game_t *g,
         if (y) y->fire_out = true;
     }
 
-    // 收入:按等效 tick 逐 tick 结算(8h 封顶,超出 25% 折算)
+    // 收入:按等效 tick 逐 tick 结算(8h 封顶,超出 25% 折算);
+    // 窃贼进行中则同一 tick 流里按同口径行窃(thieves_step 挂在 income_step)
     uint32_t ticks = dr_offline_ticks(g, now_ts_s);
     if (y) y->ticks = ticks;
     for (uint32_t i = 0; i < ticks; i++) {
@@ -664,6 +707,9 @@ uint32_t dr_rules_offline_settle(dr_rules_rt_t *rt, dr_game_t *g,
         if (y) {
             y->wood += e.wood; y->fur += e.fur; y->meat += e.meat;
             y->leather += e.leather; y->food += e.food;
+            y->stolen_wood += e.stolen_wood;
+            y->stolen_fur += e.stolen_fur;
+            y->stolen_meat += e.stolen_meat;
         }
     }
 

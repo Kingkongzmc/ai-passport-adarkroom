@@ -59,6 +59,8 @@ typedef enum {
     DR_EFF_POP_FRAC,     // 人口损失 floor(人口×arg2/1000),至少 1,同步裁岗(M6:疫病)
     DR_EFF_GOTO_W,       // 以千分比(arg2)概率跳到事件 arg1;未中则继续后续效果
                           // (M6:原版加权 nextScene 分支的移植形态,先到先得)
+    DR_EFF_THIEF_HANG,   // 吊死窃贼:停止偷窃,追回全部被偷物资(原版 global.js)
+    DR_EFF_THIEF_SPARE,  // 放过窃贼:停止偷窃,得 stealthy Perk(原版)
     DR_EFF_NONE = 0xFF,
 } dr_eff_op_t;
 
@@ -69,10 +71,17 @@ typedef struct {
 } dr_eff_t;
 
 // ---- 事件与选项 ----
+// cost_res 槽位特值:0xFF=无代价;0xFE=旗标代价——此时 cost_amt 存旗标位,
+// 要求已持有(置位)才可选,选中即消耗(清除)。宗师的火把 1 顶(原版
+// cost: {'torch': 1};火把是消耗性旗标,不在资源表)。
+#define DR_COST_NONE  0xFFu
+#define DR_COST_FLAG  0xFEu
+
 typedef struct {
     uint16_t text_id;                 // 选项文案 id(dr_text.h)
-    uint8_t  cost_res[2];             // 代价资源(0xFF=无;选中时校验并扣除)
-    uint16_t cost_amt[2];             // 代价数量(与 cost_res 一一对应)
+    uint8_t  avail_flag_clear;        // 需未置位的标记(0xFF=恒可见;已有则灰)
+    uint8_t  cost_res[3];             // 代价资源(M6 扩容 2→3:游牧商人罗盘)
+    uint16_t cost_amt[3];             // 代价数量(与 cost_res 一一对应)
     dr_eff_t effects[4];              // 依序执行,遇到跳转已定则跳过后续跳转
 } dr_event_choice_t;
 

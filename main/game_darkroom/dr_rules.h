@@ -136,6 +136,7 @@ typedef enum {
     DR_RT_EV_FIRE_OUT,       // 火熄了
     DR_RT_EV_FIRE_DOWN,      // 火弱了一档
     DR_RT_EV_WANDERER,       // 流浪者到来(arg = 人数)
+    DR_RT_EV_THIEF_START,    // 窃贼开始盯上库房(任意储量>5000+罗盘,原版 startThieves)
 } dr_rules_event_t;
 bool dr_rules_tick(dr_rules_rt_t *rt, dr_game_t *g, uint32_t now_ms,
                    dr_rules_event_t *out_ev, uint16_t *out_arg);
@@ -168,6 +169,7 @@ void     dr_rules_wanderer_schedule(dr_rules_rt_t *rt, uint32_t now_ms);
 typedef struct {
     uint32_t ticks;          // 等效收入 tick 数
     uint32_t wood, fur, meat, leather, food;   // 离线所得(已入账;food=干肉)
+    uint32_t stolen_wood, stolen_fur, stolen_meat;   // 离线被窃(窃贼进行中)
     bool     fire_out;       // 离线导致火焰熄灭
 } dr_offline_yield_t;
 uint32_t dr_rules_offline_settle(dr_rules_rt_t *rt, dr_game_t *g,

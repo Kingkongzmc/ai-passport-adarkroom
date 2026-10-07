@@ -329,17 +329,25 @@ static void test_goto_w_branch(void) {
     assert(cnt[3] > 600 && cnt[3] < 1000);
 }
 
-// 选项代价:付得起校验/扣除/不足拒绝且零副作用
+// 选项代价:付得起校验/扣除/不足拒绝且零副作用;三代价槽(M6 扩容)/
+// 旗标代价(火把,选中即清)/选项可见旗标(已有则灰)
 static void test_choice_cost(void) {
     dr_event_t tbl[1] = {0};
     tbl[0].scene_mask = DR_SCENE_ANY;
     tbl[0].priority = 1;
     tbl[0].choice_count = 2;
     tbl[0].choices[0].text_id = DR_T_UI_CONFIRM;
+    tbl[0].choices[0].avail_flag_clear = DR_COST_NONE;
     tbl[0].choices[0].cost_res[0] = DR_RES_FUR;
     tbl[0].choices[0].cost_amt[0] = 50;
+    tbl[0].choices[0].cost_res[1] = DR_COST_NONE;
+    tbl[0].choices[0].cost_res[2] = DR_COST_NONE;
     tbl[0].choices[0].effects[0] = (dr_eff_t){ (uint8_t)DR_EFF_RES_ADD, DR_RES_SCALES, 20 };
     tbl[0].choices[1].text_id = DR_T_UI_BACK;   // 无代价
+    tbl[0].choices[1].avail_flag_clear = DR_COST_NONE;
+    tbl[0].choices[1].cost_res[0] = DR_COST_NONE;
+    tbl[0].choices[1].cost_res[1] = DR_COST_NONE;
+    tbl[0].choices[1].cost_res[2] = DR_COST_NONE;
 
     dr_game_t g;
     dr_game_init(&g, 1, 1000);
@@ -364,6 +372,177 @@ static void test_choice_cost(void) {
 
     // 无代价选项恒可用
     assert(dr_event_choice_affordable(&tbl[0], 1, &g));
+
+    // 三代价槽(游牧商人罗盘口径:300毛+15鳞+5牙)
+    g.res[DR_RES_FUR] = 300; g.res[DR_RES_SCALES] = 15; g.res[DR_RES_TEETH] = 5;
+    tbl[0].choices[0].cost_res[0] = DR_RES_FUR;
+    tbl[0].choices[0].cost_amt[0] = 300;
+    tbl[0].choices[0].cost_res[1] = DR_RES_SCALES;
+    tbl[0].choices[0].cost_amt[1] = 15;
+    tbl[0].choices[0].cost_res[2] = DR_RES_TEETH;
+    tbl[0].choices[0].cost_amt[2] = 5;
+    assert(dr_event_choice_affordable(&tbl[0], 0, &g));
+    assert(dr_event_choose(tbl, 1, &g, &sess, 1000, &rng, 0, 0) == -1);
+    // 三项代价全额扣除;该选项自带 +20 鳞效果仍生效(0+20)
+    assert(g.res[DR_RES_FUR] == 0 && g.res[DR_RES_TEETH] == 0);
+    assert(g.res[DR_RES_SCALES] == 20);
+    // 三槽缺一不可
+    g.res[DR_RES_FUR] = 300; g.res[DR_RES_SCALES] = 15; g.res[DR_RES_TEETH] = 4;
+    assert(!dr_event_choice_affordable(&tbl[0], 0, &g));
+
+    // 旗标代价(宗师火把口径):要求已持有,选中即清除
+    dr_event_t tf[1] = {0};
+    tf[0].choice_count = 1;
+    tf[0].choices[0].avail_flag_clear = DR_COST_NONE;
+    tf[0].choices[0].cost_res[0] = DR_COST_FLAG;
+    tf[0].choices[0].cost_amt[0] = DR_FLAG_TORCH;
+    g.flags |= (uint64_t)1u << DR_FLAG_TORCH;
+    assert(dr_event_choice_affordable(tf, 0, &g));
+    assert(dr_event_choose(tf, 1, &g, &sess, 1000, &rng, 0, 0) == -1);
+    assert(!((g.flags >> DR_FLAG_TORCH) & 1u));   // 火把已耗(选中即清)
+    g.flags |= (uint64_t)1u << DR_FLAG_TORCH;
+    assert(dr_event_choice_affordable(tf, 0, &g));
+    g.flags &= ~((uint64_t)1u << DR_FLAG_TORCH);
+    assert(!dr_event_choice_affordable(tf, 0, &g));
+
+    // 选项可见旗标(avail_flag_clear):已有则不可选
+    dr_event_t ta[1] = {0};
+    ta[0].choice_count = 1;
+    ta[0].choices[0].avail_flag_clear = DR_FLAG_PERK_SCOUT;
+    ta[0].choices[0].cost_res[0] = DR_COST_NONE;
+    ta[0].choices[0].cost_res[1] = DR_COST_NONE;
+    ta[0].choices[0].cost_res[2] = DR_COST_NONE;
+    assert(dr_event_choice_affordable(ta, 0, &g));
+    g.flags |= (uint64_t)1u << DR_FLAG_PERK_SCOUT;
+    assert(!dr_event_choice_affordable(ta, 0, &g));
+}
+
+// 5 选项(M6 扩容 4→5):第五选项可渲染/可选择,效果正常生效
+static void test_five_choices(void) {
+    dr_event_t tbl[1] = {0};
+    tbl[0].scene_mask = DR_SCENE_ANY;
+    tbl[0].choice_count = 5;
+    for (int i = 0; i < 5; i++) {
+        tbl[0].choices[i].text_id = DR_T_UI_BACK;
+        tbl[0].choices[i].avail_flag_clear = DR_COST_NONE;
+        tbl[0].choices[i].cost_res[0] = DR_COST_NONE;
+        tbl[0].choices[i].cost_res[1] = DR_COST_NONE;
+        tbl[0].choices[i].cost_res[2] = DR_COST_NONE;
+    }
+    tbl[0].choices[4].effects[0] =
+        (dr_eff_t){ (uint8_t)DR_EFF_RES_ADD, DR_RES_BAIT, 1 };
+
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    dr_event_session_t sess;
+    dr_event_session_init(&sess);
+    dr_rng_t rng;
+    dr_rng_seed(&rng, 1);
+    uint16_t idx;
+    assert(dr_event_pick(tbl, 1, &g, &sess, 1000, DR_SCENE_HOME, &rng, &idx)
+           == DR_EVENT_FIRED);
+    assert(dr_event_choose(tbl, 1, &g, &sess, 1000, &rng, 0, 4) == -1);
+    assert(g.res[DR_RES_BAIT] == 1);
+}
+
+// 窃贼效果码(原版 global.js hang/spare 的引擎形态)
+static void test_thief_effects(void) {
+    dr_event_t tbl[2] = {0};
+    tbl[0].scene_mask = DR_SCENE_ANY;
+    tbl[0].choice_count = 1;
+    tbl[0].choices[0].avail_flag_clear = DR_COST_NONE;
+    tbl[0].choices[0].effects[0] = (dr_eff_t){ (uint8_t)DR_EFF_THIEF_HANG, 0, 0 };
+    tbl[1].scene_mask = DR_SCENE_ANY;
+    tbl[1].choice_count = 1;
+    tbl[1].choices[0].avail_flag_clear = DR_COST_NONE;
+    tbl[1].choices[0].effects[0] = (dr_eff_t){ (uint8_t)DR_EFF_THIEF_SPARE, 0, 0 };
+
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    dr_event_session_t sess;
+    dr_event_session_init(&sess);
+    dr_rng_t rng;
+    dr_rng_seed(&rng, 1);
+
+    // 吊死:追回全部被偷物资 + 停偷(旗标清、lv=2)
+    g.thieves_lv = 1;
+    g.flags = (uint64_t)1u << DR_FLAG_THIEF_ACTIVE;
+    g.stolen_wood = 100; g.stolen_fur = 50; g.stolen_meat = 25;
+    g.res[DR_RES_WOOD] = 10; g.res[DR_RES_FUR] = 1; g.res[DR_RES_MEAT] = 2;
+    assert(dr_event_choose(tbl, 2, &g, &sess, 1000, &rng, 0, 0) == -1);
+    assert(g.thieves_lv == 2);
+    assert(!((g.flags >> DR_FLAG_THIEF_ACTIVE) & 1u));
+    assert(g.res[DR_RES_WOOD] == 110 && g.res[DR_RES_FUR] == 51 &&
+           g.res[DR_RES_MEAT] == 27);
+    assert(g.stolen_wood == 0 && g.stolen_fur == 0 && g.stolen_meat == 0);
+    assert(!((g.flags >> DR_FLAG_PERK_STEALTHY) & 1u));   // 吊死不给 Perk
+
+    // 放过:不追赃,得潜行 Perk + 停偷
+    dr_game_init(&g, 1, 1000);
+    g.thieves_lv = 1;
+    g.flags = (uint64_t)1u << DR_FLAG_THIEF_ACTIVE;
+    g.stolen_wood = 70;
+    assert(dr_event_choose(tbl, 2, &g, &sess, 1000, &rng, 1, 0) == -1);
+    assert(g.thieves_lv == 2);
+    assert(!((g.flags >> DR_FLAG_THIEF_ACTIVE) & 1u));
+    assert((g.flags >> DR_FLAG_PERK_STEALTHY) & 1u);
+    assert(g.res[DR_RES_WOOD] == 15 && g.stolen_wood == 70);   // 赃物不追回
+}
+
+// 端到端:游牧商人(5 选项,买罗盘三代价+自链常驻)与宗师(旗标代价留宿)
+static void test_nomad_and_master_flow(void) {
+    uint16_t count = 0;
+    const dr_event_t *ev = dr_events_table(&count);
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    dr_event_session_t sess;
+    dr_event_session_init(&sess);
+    dr_rng_t rng;
+    dr_rng_seed(&rng, 3);
+
+    uint16_t nomad = count, master = count;
+    for (uint16_t i = 0; i < count; i++) {
+        if (ev[i].text_id == DR_T_EV_NOMAD) nomad = i;
+        if (ev[i].text_id == DR_T_EV_MASTER) master = i;
+    }
+    assert(nomad < count && master < count);
+    assert(ev[nomad].choice_count == DR_EVENT_MAX_CHOICES);   // 5 选项
+
+    // 买鳞:100 毛 → +1 鳞,链回自身(商店常驻等效)
+    g.res[DR_RES_FUR] = 205;
+    assert(dr_event_choose(ev, count, &g, &sess, 1000, &rng, nomad, 0)
+           == (int16_t)nomad);
+    assert(g.res[DR_RES_FUR] == 105 && g.res[DR_RES_SCALES] == 1);
+
+    // 买罗盘(三代价+已有则灰):第一次成功,旗标置位
+    g.res[DR_RES_FUR] = 300; g.res[DR_RES_SCALES] = 15; g.res[DR_RES_TEETH] = 5;
+    assert(dr_event_choice_affordable(&ev[nomad], 3, &g));
+    assert(dr_event_choose(ev, count, &g, &sess, 1000, &rng, nomad, 3)
+           == (int16_t)nomad);
+    assert(g.res[DR_RES_FUR] == 0 && g.res[DR_RES_SCALES] == 0 &&
+           g.res[DR_RES_TEETH] == 0);
+    assert((g.flags >> DR_FLAG_COMPASS) & 1u);
+    // 已有罗盘 → 罗盘选项灰显(affordable false),告别仍可用
+    assert(!dr_event_choice_affordable(&ev[nomad], 3, &g));
+    assert(dr_event_choice_affordable(&ev[nomad], 4, &g));
+    assert(dr_event_choose(ev, count, &g, &sess, 1000, &rng, nomad, 4) == -1);
+
+    // 宗师:留宿需 干肉100+毛100+火把1(旗标代价);无火把不可选
+    assert(dr_event_choice_affordable(&ev[master], 0, &g) == false);
+    g.flags |= (uint64_t)1u << DR_FLAG_COMPASS;
+    g.flags |= (uint64_t)1u << DR_FLAG_TORCH;
+    g.res[DR_RES_FOOD] = 100; g.res[DR_RES_FUR] = 100;
+    assert(dr_event_choice_affordable(&ev[master], 0, &g));
+    int16_t chain = dr_event_choose(ev, count, &g, &sess, 1000, &rng, master, 0);
+    assert(chain >= 0 && ev[chain].text_id == DR_T_EV_MASTER_ROOM);
+    assert(g.res[DR_RES_FOOD] == 0 && g.res[DR_RES_FUR] == 0);
+    assert(!((g.flags >> DR_FLAG_TORCH) & 1u));   // 火把消耗
+    // 选"学精准" → Perk 旗标;已学后再看该选项灰显
+    assert(dr_event_choose(ev, count, &g, &sess, 1000, &rng,
+                           (uint16_t)chain, 1) == -1);
+    assert((g.flags >> DR_FLAG_PERK_PRECISE) & 1u);
+    assert(!dr_event_choice_affordable(&ev[chain], 1, &g));
+    assert(dr_event_choice_affordable(&ev[chain], 0, &g));   // 闪避仍可选
 }
 
 // dr_event_poll:未触发也回写概率序列(§3.3 硬化)——CHANCE 未命中
@@ -424,15 +603,22 @@ static void test_table_data_valid(void) {
         for (int c = 0; c < e->choice_count; c++) {
             const dr_event_choice_t *ch = &e->choices[c];
             assert(ch->text_id != 0 && ch->text_id <= text_max);
-            for (int k = 0; k < 2; k++) {
-                if (ch->cost_res[k] == 0xFF) continue;
-                assert(ch->cost_res[k] < DR_RES_KIND_COUNT);
+            assert(ch->avail_flag_clear == DR_COST_NONE ||
+                   ch->avail_flag_clear < DR_FLAG_BITS);
+            for (int k = 0; k < 3; k++) {
+                uint8_t r = ch->cost_res[k];
+                if (r == DR_COST_NONE) continue;
+                if (r == DR_COST_FLAG) {           // 旗标代价:amt=旗标位
+                    assert(ch->cost_amt[k] < DR_FLAG_BITS);
+                    continue;
+                }
+                assert(r < DR_RES_KIND_COUNT);
                 assert(ch->cost_amt[k] > 0);           // 代价非零
             }
             for (int k = 0; k < 4; k++) {
                 uint8_t op = ch->effects[k].op;
                 if (op == DR_EFF_NONE) break;
-                assert(op <= DR_EFF_GOTO_W);           // 已知效果码
+                assert(op <= DR_EFF_THIEF_SPARE);      // 已知效果码
                 if (op == DR_EFF_GOTO_EVENT || op == DR_EFF_GOTO_W)
                     assert((uint16_t)ch->effects[k].arg1 < count);  // 链在表内
                 if (op == DR_EFF_RES_ADD)
@@ -488,6 +674,10 @@ int main(void) {
     RUN(test_poll_advances_seed);
     RUN(test_table_data_valid);
     RUN(test_beggar_flow);
+    RUN(test_choice_cost);
+    RUN(test_five_choices);
+    RUN(test_thief_effects);
+    RUN(test_nomad_and_master_flow);
     printf("test_dr_events: all passed\n");
     return 0;
 }

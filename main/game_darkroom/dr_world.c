@@ -113,17 +113,22 @@ bool dr_world_seen(const dr_world_t *w, int x, int y) {
     return (w->seen[i / 8] >> (i % 8)) & 1u;
 }
 
-static void reveal(dr_world_t *w, int x, int y) {
-    // 原版 LIGHT_RADIUS 2(菱形):|dx|+|dy| <= 2
-    for (int dy = -2; dy <= 2; dy++)
-        for (int dx = -2; dx <= 2; dx++) {
-            if ((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) > 2) continue;
+static void reveal(dr_world_t *w, int x, int y, int rad) {
+    // 原版 LIGHT_RADIUS 2(菱形):|dx|+|dy| <= r;斥候 Perk 半径翻倍(lightMap)
+    for (int dy = -rad; dy <= rad; dy++)
+        for (int dx = -rad; dx <= rad; dx++) {
+            if ((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) > rad) continue;
             int px = x + dx, py = y + dy;
             if (px < 0 || py < 0 || px >= DR_WORLD_SIZE || py >= DR_WORLD_SIZE)
                 continue;
             uint32_t i = (uint32_t)py * DR_WORLD_SIZE + px;
             w->seen[i / 8] |= (uint8_t)(1u << (i % 8));
         }
+}
+
+// 视野半径:基础 2,斥候 Perk 翻倍(原版 lightMap r *= 2)
+static int light_radius(const dr_game_t *g) {
+    return (g->flags & ((uint64_t)1u << DR_FLAG_PERK_SCOUT)) ? 4 : 2;
 }
 
 uint16_t dr_world_home_dist(const dr_game_t *g) {
@@ -185,7 +190,7 @@ bool dr_world_embark(dr_world_t *w, dr_game_t *g) {
     g->water = dr_world_water_cap(g);
     g->hero_hp = g->hero_hp_max = dr_world_health_cap(g);
     // 携带(干肉/药/子弹)已在出发界面从库存转入(food/carry_*)
-    reveal(w, g->hero_x, g->hero_y);
+    reveal(w, g->hero_x, g->hero_y, light_radius(g));
     return true;
 }
 
@@ -233,7 +238,7 @@ dr_move_result_t dr_world_move(dr_world_t *w, dr_game_t *g, int dx, int dy) {
         return DR_MOVE_BLOCKED;
     g->hero_x = (uint8_t)nx;
     g->hero_y = (uint8_t)ny;
-    reveal(w, nx, ny);
+    reveal(w, nx, ny, light_radius(g));
 
     // 原版 useSupplies:水每步 1;食每 2 步 1;断供先警告后死亡
     if (g->water > 0) g->water--;
@@ -250,10 +255,13 @@ dr_move_result_t dr_world_move(dr_world_t *w, dr_game_t *g, int dx, int dy) {
     uint8_t t = w->tiles[ny * DR_WORLD_SIZE + nx];
     if (t >= DR_WT_FOREST && t <= DR_WT_BARREN) {
         // 普通地块:遭遇判定(距上一场 ≥3 步才有 20% 触发,原版口径;
+        // 潜行 Perk 减半,原版 checkFight chance *= 0.5;
         // 地标格不触发——进入地点优先)
         w->steps_since_fight++;
+        uint16_t fight_pm =
+            (g->flags & ((uint64_t)1u << DR_FLAG_PERK_STEALTHY)) ? 100u : 200u;
         if (w->steps_since_fight >= 3 &&
-            dr_rng_chance(fight_rng(g), 200)) {
+            dr_rng_chance(fight_rng(g), fight_pm)) {
             uint8_t e = pick_enemy(w, g, fight_rng(g));
             if (e < DR_ENEMY_KIND_COUNT) {
                 w->fight_enemy = e;
@@ -427,7 +435,11 @@ static void enemy_turn(dr_world_t *w, dr_game_t *g, dr_rng_t *r,
     const dr_enemy_def_t *e = &k_enemies[w->fight_enemy];
     w->fight_round++;
     if (w->fight_round % e->delay != 0) { *out = DR_FIGHT_ENEMY_SKIP; return; }
-    if (dr_rng_below(r, 1000u) >= e->hit_pm) { *out = DR_FIGHT_ENEMY_MISS; return; }
+    // 闪避 Perk:敌方命中 ×0.8(原版 enemyAttack toHit *= 0.8)
+    uint16_t hit_pm = e->hit_pm;
+    if (g->flags & ((uint64_t)1u << DR_FLAG_PERK_EVASIVE))
+        hit_pm = (uint16_t)(hit_pm * 8u / 10u);
+    if (dr_rng_below(r, 1000u) >= hit_pm) { *out = DR_FIGHT_ENEMY_MISS; return; }
     if (g->hero_hp > e->dmg) g->hero_hp -= e->dmg;
     else {
         g->hero_hp = 0;
@@ -462,15 +474,30 @@ dr_fight_result_t dr_world_fight_attack(dr_world_t *w, dr_game_t *g) {
         if (w->carry_bullets > 0) w->carry_bullets--;
         else dmg = 1;
     }
-    if (!dr_rng_chance(r, 800)) {                  // 玩家命中 80%(原版)
+    // 蛮力 Perk:近战(骨矛/铁剑/钢剑)伤害 ×1.5 向下取整(原版 events.js
+    // weapon.type == 'melee';拳=unarmed、步枪=ranged 均不加成)
+    if (g->weapon_lv >= 1 && g->weapon_lv <= 3 &&
+        (g->flags & ((uint64_t)1u << DR_FLAG_PERK_BARBARIAN)))
+        dmg = (uint8_t)(dmg + dmg / 2u);
+    // 玩家命中 80%(原版 BASE_HIT_CHANCE);精准 Perk +10%(getHitChance)
+    uint16_t hit_pm = (g->flags & ((uint64_t)1u << DR_FLAG_PERK_PRECISE))
+                          ? 900u : 800u;
+    if (!dr_rng_chance(r, (uint16_t)hit_pm)) {
         dr_fight_result_t out;
         enemy_turn(w, g, r, &out);
         return out;
     }
-    if (w->fight_hp > dmg) w->fight_hp -= dmg;
-    else {
+    if (w->fight_hp > dmg) {
+        w->fight_hp -= dmg;
+    } else {
         fight_loot(w, g, r);
         w->fight_enemy = DR_ENEMY_KIND_COUNT;
+        if (w->fight_from_city) {
+            // 城市地点战获胜 = 清剿完成(原版 setpieces 地牢 end 场景
+            // World.clearDungeon + game.cityCleared;军队突袭的门)
+            g->flags |= (uint64_t)1u << DR_FLAG_CITY_CLEARED;
+            w->fight_from_city = false;
+        }
         return DR_FIGHT_WIN;
     }
     dr_fight_result_t out;
@@ -542,6 +569,8 @@ static void loc_fight(dr_world_t *w, dr_game_t *g, uint8_t enemy) {
     w->fight_enemy = enemy;
     w->fight_hp = k_enemies[enemy].hp;
     w->fight_round = 0;
+    // 城市搜出来的战斗,胜利即清剿完成(军队突袭之门,原版 cityCleared)
+    w->fight_from_city = (w->location == DR_WT_CITY);
 }
 
 dr_loc_result_t dr_world_location_search(dr_world_t *w, dr_game_t *g,
@@ -638,4 +667,30 @@ bool dr_world_eat(dr_game_t *g) {
     uint8_t cap = dr_world_health_cap(g);
     g->hero_hp = (g->hero_hp > cap - 8u) ? cap : (uint8_t)(g->hero_hp + 8u);
     return true;
+}
+
+// ---- 侦查揭示(原版 World.applyMap;M6 切片二) ----
+bool dr_world_map_has_unseen(const dr_world_t *w) {
+    for (uint32_t i = 0; i < sizeof(w->seen); i++)
+        if (w->seen[i] != 0xFFu) return true;
+    return false;
+}
+
+bool dr_world_apply_map(dr_world_t *w, const dr_game_t *g) {
+    if (!dr_world_map_has_unseen(w)) return false;
+    // 原版:随机取一个未点亮格,揭开半径 5 菱形(do{}while(已点亮) 重掷)。
+    // 设备口径:改由 map_seed 派生的确定性流从头找第一个未点亮格——刚揭过
+    // 的区域自然变 seen,再次买图/开机揭示自动落到更远的新格;斥候 Perk
+    // 开机自动揭示发生在出脚步进之前,迷雾为零,故每次开机同一片。
+    dr_rng_t r;
+    dr_rng_seed(&r, (uint32_t)g->map_seed * 2654435761u + 0x5C0F7u);
+    for (int tries = 0; tries < 8192; tries++) {
+        int x = (int)dr_rng_below(&r, DR_WORLD_SIZE);
+        int y = (int)dr_rng_below(&r, DR_WORLD_SIZE);
+        if (!dr_world_seen(w, x, y)) {
+            reveal(w, x, y, 5);
+            return true;
+        }
+    }
+    return false;
 }

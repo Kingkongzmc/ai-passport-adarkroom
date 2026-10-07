@@ -54,6 +54,7 @@ typedef struct {
     uint16_t fight_hp;
     uint16_t fight_round;     // 敌人按 attackDelay 逢倍数回合反击
     uint16_t steps_since_fight;
+    bool     fight_from_city; // 本场战斗来自城市搜索(胜利置 cityCleared 旗标)
     // 地点状态
     uint8_t  location;        // 当前地点 tile;0=不在地点
 } dr_world_t;
@@ -171,6 +172,13 @@ typedef enum {
 // 搜索当前地点一次(洞穴消耗火把标记);loot 文案摘要写入 out(可 NULL)
 dr_loc_result_t dr_world_location_search(dr_world_t *w, dr_game_t *g,
                                          char *out, size_t outsz);
+
+// ---- 侦查揭示(原版 World.applyMap / lightMap;M6 切片二) ----
+// 迷雾是会话态:买地图与斥候 Perk 的开机揭示都走"确定性揭示一片"——
+// 以 map_seed 派生序列取第 map_scans 片(半径 5 菱形,原版 applyMap 口径),
+// 同种子同开机次数永远同一片。返回 false = 已无迷雾可揭(调用方不扣钱)。
+bool dr_world_apply_map(dr_world_t *w, const dr_game_t *g);
+bool dr_world_map_has_unseen(const dr_world_t *w);
 
 #ifdef __cplusplus
 }

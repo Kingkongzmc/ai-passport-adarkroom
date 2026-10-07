@@ -136,7 +136,7 @@ static listrow_t s_list[LIST_ROWS];
 static dr_world_t s_world;   // 世界与远征运行态(会话内;种子派生,不落盘)
 // 弹窗层
 static lv_obj_t *s_veil, *s_dpanel, *s_dtitle, *s_dbody;
-static actrow_t s_dacts[4];
+static actrow_t s_dacts[5];   // 弹窗选项行(M6 切片二:游牧商人 5 选项)
 // 地图/房间格阵 + 图例 + 血条
 #define MAP_CELLS 81
 static lv_obj_t *s_map[MAP_CELLS];
@@ -459,8 +459,8 @@ static void build_ui(void) {
     lv_obj_add_flag(s_dtitle, LV_OBJ_FLAG_HIDDEN);
     s_dbody = label_new(s_dpanel, &dr_font_12, lv_color_hex(COL_TEXT), 0, 0, 176, 100);
 
-    // 弹窗选项行 4 行 172 宽(页面渲染时定位)
-    for (int i = 0; i < 4; i++) {
+    // 弹窗选项行 5 行 172 宽(页面渲染时定位;M6 切片二 4→5)
+    for (int i = 0; i < 5; i++) {
         actrow_t *a = &s_dacts[i];
         a->row = lv_obj_create(s_dpanel);
         lv_obj_set_size(a->row, DROW_W, ROW_H);
@@ -749,7 +749,7 @@ static void clear_scene(void) {
     lv_obj_add_flag(s_dpanel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dtitle, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dbody, LV_OBJ_FLAG_HIDDEN);
-    for (int i = 0; i < 4; i++) lv_obj_add_flag(s_dacts[i].row, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < 5; i++) lv_obj_add_flag(s_dacts[i].row, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ===================================================================
@@ -1432,17 +1432,29 @@ static const char *k_res_str[DR_RES_KIND_COUNT] = {
     [DR_RES_TEETH] = "牙", [DR_RES_CLOTH] = "布", [DR_RES_MEDICINE] = "药",
 };
 
+// 旗标代价的显示名(现有:火把;新旗标代价须在此登记)
+static const char *flag_cost_name(uint8_t flag) {
+    return (flag == DR_FLAG_TORCH) ? "火把" : "?";
+}
+
 static const char *ev_choice_label(const dr_event_t *e, int i) {
     static char buf[48];
     snprintf(buf, sizeof(buf), "%s", dr_text(e->choices[i].text_id));
-    if (e->choices[i].cost_res[0] == 0xFF) return buf;
     size_t n = strlen(buf);
-    for (int k = 0; k < 2 && n < sizeof(buf) - 10; k++) {
+    for (int k = 0; k < 3 && n < sizeof(buf) - 12; k++) {
         uint8_t r = e->choices[i].cost_res[k];
-        if (r == 0xFF) break;
-        int w = snprintf(buf + n, sizeof(buf) - n, "%s%u%s",
+        if (r == DR_COST_NONE) break;
+        int w;
+        if (r == DR_COST_FLAG) {
+            // 旗标代价:显示"火把1"(要求已持有,选中即消耗)
+            w = snprintf(buf + n, sizeof(buf) - n, "%s%s1",
+                         k == 0 ? "·" : " ",
+                         flag_cost_name((uint8_t)e->choices[i].cost_amt[k]));
+        } else {
+            w = snprintf(buf + n, sizeof(buf) - n, "%s%u%s",
                          k == 0 ? "·" : " ",
                          e->choices[i].cost_amt[k], k_res_str[r]);
+        }
         if (w > 0) n += (size_t)w;
     }
     return buf;
@@ -1467,15 +1479,20 @@ static void render_event(void) {
     if (bh > 112) bh = 112;
     lv_obj_set_size(s_dbody, 176, bh);
     set_dbody(dr_text(e->text_id));
-    for (int i = 0; i < e->choice_count && i < 4; i++) {
+    for (int i = 0; i < e->choice_count && i < 5; i++) {
         actrow_t *a = &s_dacts[i];
         lv_obj_clear_flag(a->row, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_pos(a->row, 0, 164 - (e->choice_count - 1 - i) * 24);
         set_act(a, ev_choice_label(e, i), s.focus == i, 0);
-        if (!dr_event_choice_affordable(e, (uint8_t)i, &s.game))
-            lv_obj_set_style_text_color(a->lbl, lv_color_hex(COL_DIM), 0);
+        bool ok = dr_event_choice_affordable(e, (uint8_t)i, &s.game);
+        // 斥候"买地图":迷雾揭完则无可买(原版 available: !World.seenAll)
+        if (e->text_id == DR_T_EV_SCOUT &&
+            e->choices[i].text_id == DR_T_EV_SCOUT_MAP &&
+            !dr_world_map_has_unseen(&s_world))
+            ok = false;
+        if (!ok) lv_obj_set_style_text_color(a->lbl, lv_color_hex(COL_DIM), 0);
     }
-    for (int i = e->choice_count; i < 4; i++)
+    for (int i = e->choice_count; i < 5; i++)
         lv_obj_add_flag(s_dacts[i].row, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -1748,6 +1765,12 @@ static bool row_enabled(int idx) {
         case PG_EVENT: {
             uint16_t c = 0;
             const dr_event_t *ev = dr_events_table(&c);
+            const dr_event_choice_t *ch = &ev[s.ev_idx].choices[idx];
+            // 斥候"买地图":迷雾揭完则不可选(原版 available: !World.seenAll)
+            if (ev[s.ev_idx].text_id == DR_T_EV_SCOUT &&
+                ch->text_id == DR_T_EV_SCOUT_MAP &&
+                !dr_world_map_has_unseen(&s_world))
+                return false;
             return dr_event_choice_affordable(&ev[s.ev_idx], (uint8_t)idx,
                                               &s.game);
         }
@@ -1889,9 +1912,6 @@ static void list_action(int idx) {
         case PG_MAP: {
             uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
             if (!s.game.in_wilderness) {
-                static const uint8_t outfit_res[3] = {
-                    DR_RES_FOOD, DR_RES_MEDICINE, DR_RES_BULLETS
-                };
                 if (idx <= 2) {                     // 进入携带调配
                     s.outfit_adj = (int8_t)idx;
                     s.dirty = true;
@@ -2141,6 +2161,7 @@ static void handle_ok(void) {
             uint16_t count = 0;
             const dr_event_t *ev = dr_events_table(&count);
             const dr_event_t *cur = &ev[s.ev_idx];
+            uint8_t bought_ch = (uint8_t)s.focus;
             if (!dr_event_choice_affordable(cur, (uint8_t)s.focus, &s.game)) {
                 log_push("身上的东西不够");   // 焦点跳过是第一道,这里兜底
                 toast("身上的东西不够");
@@ -2152,6 +2173,13 @@ static void handle_ok(void) {
             if (chain == DR_EVENT_CHOOSE_REJECTED) break;
             s.save_pending = true;
             log_push(dr_text(cur->choices[s.focus].text_id));
+            // 斥候"买地图":迷雾是会话态,引擎效果够不着——UI 桥接揭示
+            // (原版 onChoose: World.applyMap)
+            if (cur->text_id == DR_T_EV_SCOUT &&
+                cur->choices[bought_ch].text_id == DR_T_EV_SCOUT_MAP &&
+                dr_world_apply_map(&s_world, &s.game)) {
+                log_push("地图上多了一片探明的区域");
+            }
             if (chain >= 0) {
                 s.ev_idx = (uint16_t)chain;
                 s.focus = 0;
@@ -2281,6 +2309,10 @@ static void tick(lv_timer_t *t) {
                       : arg < 10 ? "一小群人流浪到此"
                       : arg < 30 ? "一支车队安顿了下来"
                                  : "大批流民涌到了火光旁");
+                s.save_pending = true;
+                break;
+            case DR_RT_EV_THIEF_START:
+                log_push("库房的存货太扎眼,有人在暗中顺手牵羊");
                 s.save_pending = true;
                 break;
             default:
@@ -2651,24 +2683,37 @@ void darkroom_app_enter(void) {
         dr_offline_yield_t oy;
         dr_rules_offline_settle(&s.rules_rt, &s.game, dr_port_now_ts(),
                                 (uint32_t)(esp_timer_get_time() / 1000), &oy);
-        if (oy.ticks) {
-            // 锚点已被结算推进,立刻落盘——否则断电会让同一离线窗口重复结算
-            s.save_pending = true;
-            if (oy.wood || oy.fur || oy.meat || oy.leather || oy.food) {
-                char line[64];
-                snprintf(line, sizeof(line),
-                         "离线:木+%lu 毛+%lu 肉+%lu 革+%lu 干+%lu",
-                         (unsigned long)oy.wood, (unsigned long)oy.fur,
-                         (unsigned long)oy.meat, (unsigned long)oy.leather,
-                         (unsigned long)oy.food);
-                log_push(line);
+            if (oy.ticks) {
+                // 锚点已被结算推进,立刻落盘——否则断电会让同一离线窗口重复结算
+                s.save_pending = true;
+                if (oy.wood || oy.fur || oy.meat || oy.leather || oy.food) {
+                    char line[64];
+                    snprintf(line, sizeof(line),
+                             "离线:木+%lu 毛+%lu 肉+%lu 革+%lu 干+%lu",
+                             (unsigned long)oy.wood, (unsigned long)oy.fur,
+                             (unsigned long)oy.meat, (unsigned long)oy.leather,
+                             (unsigned long)oy.food);
+                    log_push(line);
+                }
+                if (oy.stolen_wood || oy.stolen_fur || oy.stolen_meat) {
+                    char line[64];
+                    snprintf(line, sizeof(line),
+                             "离线:库房被偷 木%lu 毛%lu 肉%lu",
+                             (unsigned long)oy.stolen_wood,
+                             (unsigned long)oy.stolen_fur,
+                             (unsigned long)oy.stolen_meat);
+                    log_push(line);
+                }
+                if (oy.fire_out) log_push("回来时火已经熄了");
             }
-            if (oy.fire_out) log_push("回来时火已经熄了");
-        }
     }
 
     // 世界(种子派生,重启同图)与远征中断兜底:断电按死亡处理(物资已扣)
     dr_world_gen(&s_world, s.game.map_seed);
+    // 斥候 Perk:开机确定性揭示一片(迷雾会话态,同种子每次开机同一片)
+    if ((s.game.flags & ((uint64_t)1u << DR_FLAG_PERK_SCOUT)) &&
+        dr_world_apply_map(&s_world, &s.game))
+        log_push("侦查的本事让你记起了荒野的一角");
     if (loaded && s.game.in_wilderness) {
         dr_world_fail_trip(&s_world, &s.game);
         log_push("远征中断:你在荒野中失去了意识");
@@ -2725,6 +2770,18 @@ void dr_debug_set_wild(uint8_t x, uint8_t y) {
     s.page = PG_MAP;
     s.focus = 0;
     s.dirty = true;
+}
+
+// 模拟器诊断:直达事件弹窗(仅测试钩子;事件表按"最小 id 优先"确定性挑选,
+// 按键脚本等不到低频事件,这里直接指定表下标——SIM_EVENT 注入,配合
+// SIM_PERSIST 造档可实测任意事件的选择链)。
+void dr_debug_force_event(uint16_t idx) {
+    uint16_t count = 0;
+    dr_events_table(&count);
+    if (idx >= count) return;
+    s.ev_idx = idx;
+    s.ev_from = PG_HOME;   // 解决后回主页(村庄事件可改由按键先行切页)
+    page_goto(PG_EVENT);
 }
 
 // 模拟器诊断:打印对象树关键状态(仅主机构建使用)

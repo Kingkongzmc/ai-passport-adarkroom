@@ -77,6 +77,34 @@ static const char *k_texts[] = {
 
     [DR_T_EV_BEAST]        = "一群野兽从林子里扑出来。战斗短暂而血腥,野兽被击退,村民也有死伤。",
     [DR_T_EV_BEAST_C0]     = "回家",
+
+    // ---- M6 切片二(原版 room.js/global.js/outside.js 事件,中文重写) ----
+    [DR_T_EV_RAID]         = "一声枪响划过林梢。一队武装的人冲出森林,朝人群开火。他们最终被驱退,村里却添了几座新坟。",
+
+    [DR_T_EV_NOMAD]        = "游牧商人背着大包小包挪过来,不肯说来处,也不打算久留。他嘟囔:陷阱装上饵,收获才像样。",
+    [DR_T_EV_NOMAD_SCALES] = "买鳞",
+    [DR_T_EV_NOMAD_TEETH]  = "买牙",
+    [DR_T_EV_NOMAD_BAIT]   = "买饵",
+    [DR_T_EV_NOMAD_COMPASS] = "买罗盘",
+    [DR_T_EV_GOODBYE]      = "告别",
+
+    [DR_T_EV_THIEF]        = "村民从库房里揪出一个脏兮兮的男人,说他的同伙一直在偷库存,嚷着要把他吊起来示众。",
+    [DR_T_EV_THIEF_HANG]   = "吊死他",
+    [DR_T_EV_THIEF_HANGED] = "窃贼被高高地吊在库房门前。杀鸡儆猴,前些阵子不翼而飞的物资陆陆续续都回来了。",
+    [DR_T_EV_THIEF_SPARE]  = "放过他",
+    [DR_T_EV_THIEF_SPARED] = "他说他感激不迭,往后不会再来了。临走前,他把一身翻墙越货、不留影踪的本事教给了你。",
+
+    [DR_T_EV_SCOUT]        = "斥候说她走遍了这片荒野。这些见闻可以卖给你,但得先给点好处。",
+    [DR_T_EV_SCOUT_MAP]    = "买地图",
+    [DR_T_EV_SCOUT_LEARN]  = "学侦查",
+
+    [DR_T_EV_MASTER]       = "一位老流浪者上门。他笑容可掬,讨一晚宿处。",
+    [DR_T_EV_MASTER_AGREE] = "留宿他",
+    [DR_T_EV_MASTER_ROOM]  = "火边一夜,老人愿意倾囊相授。挑一样吧。",
+    [DR_T_EV_MASTER_EVASION] = "学闪避",
+    [DR_T_EV_MASTER_PRECISION] = "学精准",
+    [DR_T_EV_MASTER_FORCE] = "学蛮力",
+    [DR_T_EV_MASTER_NOTHING] = "不必了",
 };
 
 const char *dr_text(uint16_t id) {

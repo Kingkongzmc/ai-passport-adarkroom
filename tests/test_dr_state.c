@@ -195,6 +195,39 @@ static void test_v1_migration(void) {
     assert(memcmp(&g, &cur, sizeof(g)) == 0);
 }
 
+// v4 → v5(M6 切片二:窃贼三段尾插):前缀逐字段保留,新字段零填充
+static void test_v4_migration(void) {
+    dr_game_t g;
+    dr_game_init(&g, 4242, 1000);
+    g.res[DR_RES_WOOD] = 77;
+    g.res[DR_RES_MEDICINE] = 9;
+    g.population = 5;
+    g.weapon_lv = 2;
+    g.temp_lv = 3;
+    g.builder_lv = 4;
+    // v5 新字段塞脏值:迁移后必须归零,证明是零填充而非穿帮
+    g.thieves_lv = 1;
+    g.stolen_wood = 999;
+    g.stolen_fur = 888;
+    g.stolen_meat = 777;
+
+    uint8_t blob[600];
+    size_t n = dr_state_pack_v4(&g, blob, sizeof(blob));
+    // v4 体 = 505 字节字段;flags 撑 8 字节对齐 → sizeof 取整到 512
+    assert(n == sizeof(dr_save_hdr_t) + 512u);
+    dr_game_t out;
+    assert(dr_state_load(blob, n, &out));
+    assert(out.saved_at_ts == 1000);
+    assert(out.res[DR_RES_WOOD] == 77 && out.res[DR_RES_MEDICINE] == 9);
+    assert(out.population == 5 && out.weapon_lv == 2);
+    assert(out.temp_lv == 3 && out.builder_lv == 4);
+    assert(out.thieves_lv == 0);            // 从未触发过窃贼
+    assert(out.stolen_wood == 0 && out.stolen_fur == 0 && out.stolen_meat == 0);
+
+    // 长度不符的 v4 镜像(老结构被截断)拒绝
+    assert(!dr_state_load(blob, n - 1, &out));
+}
+
 int main(void) {
     test_crc_and_rng();
     test_pack_roundtrip();
@@ -203,6 +236,7 @@ int main(void) {
     test_offline_ticks();
     test_load_is_side_effect_free();
     test_v1_migration();
+    test_v4_migration();
     printf("test_dr_state: all passed\n");
     return 0;
 }

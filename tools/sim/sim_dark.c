@@ -231,6 +231,10 @@ int main(int argc, char **argv) {
         if (xy) sscanf(xy, "%hhu,%hhu", &wx, &wy);
         dr_debug_set_wild(wx, wy);
     }
+    // SIM_EVENT=<表下标>:直达事件弹窗(事件表最小 id 优先,按键脚本
+    // 等不到低频事件;配合 SIM_PERSIST 造档实测选择链)
+    char *sim_ev = getenv("SIM_EVENT");
+    if (sim_ev) dr_debug_force_event((uint16_t)atoi(sim_ev));
 
     for (int f = 0; f < frames; f++) {
         for (int k = 0; k < s_key_count; k++)

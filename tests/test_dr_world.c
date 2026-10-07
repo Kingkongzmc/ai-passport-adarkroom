@@ -324,6 +324,222 @@ static void test_locations(void) {
     assert(dr_world_bag_cap(&g) == 700);
 }
 
+// ---- M6 切片二:Perk 战斗数值(原版 events.js/world.js 逐项) ----
+static void test_perk_combat(void) {
+    dr_world_t w;
+    dr_world_gen(&w, 7);
+    dr_game_t g;
+    dr_game_init(&g, 0x12345678, 1000);   // map_seed 非零
+    g.res[DR_RES_FOOD] = 10;
+    assert(dr_world_outfit_add(&w, &g, DR_RES_FOOD, 10));
+    assert(dr_world_embark(&w, &g));
+
+    // 蛮力:骨矛(近战 2 伤)×1.5 → 3 伤/刀(向下取整;未命中不掉敌血)
+    g.weapon_lv = 1;
+    g.flags |= (uint64_t)1u << DR_FLAG_PERK_BARBARIAN;
+    w.fight_enemy = DR_ENEMY_BEAST;
+    w.fight_hp = 100;
+    w.fight_round = 0;
+    int guard = 0;
+    uint16_t before = w.fight_hp;
+    while (dr_world_fight_active(&w) && w.fight_hp == before && guard++ < 60)
+        (void)dr_world_fight_attack(&w, &g);
+    assert(before - w.fight_hp == 3);      // 2 → 3
+
+    // 精准:玩家命中率 80%→90%(统计断言,200 掷;
+    // 玩家未命中时敌血不动——以敌血差值判定命中)
+    dr_game_t g2;
+    dr_game_init(&g2, 0x12345678, 1000);
+    int hits = 0;
+    for (int i = 0; i < 200; i++) {
+        w.fight_enemy = DR_ENEMY_BEAST;
+        w.fight_hp = 200;
+        w.fight_round = 0;
+        g2.hero_hp = g2.hero_hp_max = 10;
+        g2.weapon_lv = 0;                  // 拳 1 伤
+        g2.flags |= (uint64_t)1u << DR_FLAG_PERK_PRECISE;
+        uint16_t hp_before = w.fight_hp;
+        (void)dr_world_fight_attack(&w, &g2);
+        if (w.fight_hp < hp_before) hits++;
+    }
+    assert(hits > 155);                    // 期望 180(90%),3σ 界
+
+    // 闪避:敌方命中 ×0.8(吼兽 800→640,统计断言)
+    int ehits = 0;
+    for (int i = 0; i < 200; i++) {
+        w.fight_enemy = DR_ENEMY_BEAST;
+        w.fight_hp = 200;
+        w.fight_round = 0;
+        g2.hero_hp = g2.hero_hp_max = 10;
+        g2.weapon_lv = 4;                  // 步枪:无弹退化拳,必不掉敌血
+        w.carry_bullets = 0;
+        g2.flags = (uint64_t)1u << DR_FLAG_PERK_EVASIVE;
+        dr_fight_result_t r = dr_world_fight_attack(&w, &g2);
+        if (r == DR_FIGHT_ENEMY_HIT) ehits++;
+        else assert(r == DR_FIGHT_ENEMY_MISS);
+    }
+    assert(ehits > 100 && ehits < 160);    // 期望 128(64%),3σ 界
+}
+
+// 潜行:遭遇触发率减半(原版 checkFight chance *= 0.5;统计断言)
+static void test_stealthy(void) {
+    // 找一块 2×2 纯地形格(避开村庄/地标:踏上有结局的格会打断游走)
+    dr_world_t w0;
+    dr_world_gen(&w0, 7);
+    int bx = -1, by = -1;
+    for (int y = 2; y < DR_WORLD_SIZE - 3 && bx < 0; y++)
+        for (int x = 2; x < DR_WORLD_SIZE - 3 && bx < 0; x++) {
+            uint8_t a = dr_world_tile(&w0, x, y);
+            uint8_t b = dr_world_tile(&w0, x + 1, y);
+            uint8_t c = dr_world_tile(&w0, x, y + 1);
+            uint8_t d = dr_world_tile(&w0, x + 1, y + 1);
+            if (a > DR_WT_BARREN || b > DR_WT_BARREN ||
+                c > DR_WT_BARREN || d > DR_WT_BARREN)
+                continue;
+            bx = x; by = y;
+        }
+    assert(bx >= 0);
+
+    int count_fights(bool perk) {
+        dr_world_t w;
+        dr_world_gen(&w, 7);
+        dr_game_t g;
+        dr_game_init(&g, 0x12345678, 1000);
+        g.res[DR_RES_FOOD] = 10;
+        assert(dr_world_outfit_add(&w, &g, DR_RES_FOOD, 10));
+        assert(dr_world_embark(&w, &g));
+        g.hero_x = (uint8_t)bx;
+        g.hero_y = (uint8_t)by;
+        if (perk) g.flags |= (uint64_t)1u << DR_FLAG_PERK_STEALTHY;
+        static const int dirs[4][2] = { {1,0},{0,1},{-1,0},{0,-1} };
+        int fights = 0;
+        for (int i = 0; i < 400; i++) {
+            if (i % 40 == 0) { g.water = 200; g.food = 200; }   // 不断供
+            dr_move_result_t r = dr_world_move(&w, &g,
+                                               dirs[i % 4][0], dirs[i % 4][1]);
+            if (r == DR_MOVE_FIGHT) {
+                fights++;
+                w.fight_enemy = DR_ENEMY_KIND_COUNT;   // 秒退战斗继续走
+            } else {
+                assert(r == DR_MOVE_OK);   // 2×2 纯地形格:只应有普通步
+            }
+        }
+        return fights;
+    }
+    int plain = count_fights(false);
+    int stealth = count_fights(true);
+    // 期望约 79 对 39(400 步,前 3 步免战);统计界放宽避免种子抖动误报
+    assert(plain > 40 && plain < 120);
+    assert(stealth > 15 && stealth < 70);
+    assert(stealth * 2 < plain + 30);
+}
+
+// 城市清剿旗标(原版 setpieces 地牢 end:World.clearDungeon + cityCleared)
+static void test_city_cleared(void) {
+    dr_world_t w;
+    dr_world_gen(&w, 99);
+    dr_game_t g;
+    dr_game_init(&g, 99, 1000);
+    g.res[DR_RES_FOOD] = 60;
+    g.armor_lv = 3;                         // 钢甲:HP 45,免遭统计翻车
+    assert(dr_world_outfit_add(&w, &g, DR_RES_FOOD, 60));
+    assert(dr_world_embark(&w, &g));
+    g.weapon_lv = 3;                        // 钢剑 6 伤
+    char line[64];
+
+    // 非城市(老屋)战斗胜利 → 不置旗标。战斗由生产路径触发(地点搜索),
+    // 敌血置 1 快速终结,验证的是旗标逻辑本身。
+    int hx = -1, hy = -1;
+    for (int y = 0; y < DR_WORLD_SIZE && hx < 0; y++)
+        for (int x = 0; x < DR_WORLD_SIZE; x++)
+            if (dr_world_tile(&w, x, y) == DR_WT_HOUSE) { hx = x; hy = y; break; }
+    assert(hx >= 0);
+    g.hero_x = (uint8_t)hx; g.hero_y = (uint8_t)hy;
+    w.location = DR_WT_HOUSE;
+    int guard = 0;
+    while (!dr_world_fight_active(&w) && guard++ < 200)
+        (void)dr_world_location_search(&w, &g, line, sizeof(line));
+    assert(dr_world_fight_active(&w));
+    w.fight_hp = 1;
+    g.hero_hp = g.hero_hp_max = dr_world_health_cap(&g);
+    dr_fight_result_t r = DR_FIGHT_NONE;
+    while (dr_world_fight_active(&w) && guard++ < 60)
+        r = dr_world_fight_attack(&w, &g);
+    assert(r == DR_FIGHT_WIN);
+    assert(!((g.flags >> DR_FLAG_CITY_CLEARED) & 1u));
+
+    // 城市战斗胜利 → 置旗标(军队突袭之门)
+    int cx = -1, cy = -1;
+    for (int y = 0; y < DR_WORLD_SIZE && cx < 0; y++)
+        for (int x = 0; x < DR_WORLD_SIZE; x++)
+            if (dr_world_tile(&w, x, y) == DR_WT_CITY) { cx = x; cy = y; break; }
+    assert(cx >= 0);
+    g.hero_x = (uint8_t)cx; g.hero_y = (uint8_t)cy;
+    w.location = DR_WT_CITY;
+    guard = 0;
+    while (!dr_world_fight_active(&w) && guard++ < 400)
+        (void)dr_world_location_search(&w, &g, line, sizeof(line));
+    assert(dr_world_fight_active(&w));
+    w.fight_hp = 1;
+    g.hero_hp = g.hero_hp_max = dr_world_health_cap(&g);
+    r = DR_FIGHT_NONE;
+    while (dr_world_fight_active(&w) && guard++ < 60)
+        r = dr_world_fight_attack(&w, &g);
+    assert(r == DR_FIGHT_WIN);
+    assert((g.flags >> DR_FLAG_CITY_CLEARED) & 1u);
+}
+
+// 侦查揭示(原版 World.applyMap):确定性一片 + 斥候视野半径翻倍
+static void test_scout_reveal(void) {
+    dr_world_t w, w2;
+    dr_world_gen(&w, 0x1234);
+    dr_world_gen(&w2, 0x1234);
+    dr_game_t g, g2;
+    dr_game_init(&g, 0x12345678, 1000);
+    dr_game_init(&g2, 0x12345678, 1000);
+
+    assert(dr_world_apply_map(&w, &g));
+    assert(dr_world_apply_map(&w2, &g2));
+    assert(memcmp(w.seen, w2.seen, sizeof(w.seen)) == 0);   // 同种子同片
+    int seen = 0;
+    for (int y = 0; y < DR_WORLD_SIZE; y++)
+        for (int x = 0; x < DR_WORLD_SIZE; x++)
+            if (dr_world_seen(&w, x, y)) seen++;
+    assert(seen == 61);                    // 半径 5 菱形=2r²+2r+1(荒野腹地不裁边)
+    assert(dr_world_map_has_unseen(&w));
+
+    // 斥候视野:出发即点亮半径 4(41 格),基础 2(13 格)
+    dr_world_t w3;
+    dr_world_gen(&w3, 0x1234);
+    dr_game_t g3;
+    dr_game_init(&g3, 0x12345678, 1000);
+    g3.res[DR_RES_FOOD] = 10;
+    assert(dr_world_outfit_add(&w3, &g3, DR_RES_FOOD, 10));
+    assert(dr_world_embark(&w3, &g3));
+    int base = 0;
+    for (int y = 0; y < DR_WORLD_SIZE; y++)
+        for (int x = 0; x < DR_WORLD_SIZE; x++)
+            if (dr_world_seen(&w3, x, y)) base++;
+    assert(base == 13);
+    g3.flags |= (uint64_t)1u << DR_FLAG_PERK_SCOUT;
+    assert(dr_world_embark(&w3, &g3) == false);   // 已在远征中,不可再出发
+
+    // 直接验证 light_radius 语义:新世界带 Perk 出发
+    dr_world_t w4;
+    dr_world_gen(&w4, 0x1234);
+    dr_game_t g4;
+    dr_game_init(&g4, 0x12345678, 1000);
+    g4.res[DR_RES_FOOD] = 10;
+    g4.flags |= (uint64_t)1u << DR_FLAG_PERK_SCOUT;
+    assert(dr_world_outfit_add(&w4, &g4, DR_RES_FOOD, 10));
+    assert(dr_world_embark(&w4, &g4));
+    int wide = 0;
+    for (int y = 0; y < DR_WORLD_SIZE; y++)
+        for (int x = 0; x < DR_WORLD_SIZE; x++)
+            if (dr_world_seen(&w4, x, y)) wide++;
+    assert(wide == 41);                    // 2r²+2r+1,r=4
+}
+
 int main(void) {
     test_gen();
     test_embark_and_supplies();
@@ -334,6 +550,10 @@ int main(void) {
     test_danger();
     test_fight();
     test_locations();
+    test_perk_combat();
+    test_stealthy();
+    test_city_cleared();
+    test_scout_reveal();
     printf("test_dr_world: all passed\n");
     return 0;
 }

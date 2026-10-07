@@ -482,6 +482,73 @@ static void test_craft(void) {
     assert(c.wood == 800 && c.leather == 100 && c.scales == 10);
 }
 
+// ---- 窃贼(M6 切片二,原版 startThieves + income.thieves + addStolen) ----
+static void test_thieves(void) {
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    dr_rules_rt_t rt;
+    dr_rules_rt_init(&rt, &g, 0);
+    dr_rules_event_t ev; uint16_t arg;
+
+    // 触发门:罗盘未买 → 任意储量再多也不触发
+    g.res[DR_RES_WOOD] = 9000;
+    (void)dr_rules_tick(&rt, &g, 1000u, &ev, &arg);
+    assert(g.thieves_lv == 0);
+    // 买罗盘 + 任意储量 >5000 → 启动偷窃(置 THIEF_ACTIVE,一次性)
+    g.flags |= (uint64_t)1u << DR_FLAG_COMPASS;
+    assert(dr_rules_tick(&rt, &g, 2000u, &ev, &arg));
+    assert(ev == DR_RT_EV_THIEF_START);
+    assert(g.thieves_lv == 1);
+    assert((g.flags >> DR_FLAG_THIEF_ACTIVE) & 1u);
+    // 已触发过就永不重复(储量清掉再堆上也不再触发)
+    g.res[DR_RES_WOOD] = 100;
+    (void)dr_rules_tick(&rt, &g, 3000u, &ev, &arg);
+    g.res[DR_RES_WOOD] = 9000;
+    ev = DR_RT_EV_NONE;
+    (void)dr_rules_tick(&rt, &g, 4000u, &ev, &arg);
+    assert(ev != DR_RT_EV_THIEF_START && g.thieves_lv == 1);
+
+    // 偷窃结算(原版每 10s:木-10 毛-5 肉-5;存量不足只偷余量,钳 0)
+    g.res[DR_RES_WOOD] = 1000; g.res[DR_RES_FUR] = 100; g.res[DR_RES_MEAT] = 100;
+    uint32_t wood_before = g.res[DR_RES_WOOD];
+    // 推进到下一个经济 tick(10s 节拍;rt 从 0 起拍,econ_next=10s)
+    for (uint32_t t = 5; t <= 12; t++) (void)dr_rules_tick(&rt, &g, t * 1000u, &ev, &arg);
+    assert(g.res[DR_RES_WOOD] == wood_before - 10);
+    assert(g.res[DR_RES_FUR] == 95 && g.res[DR_RES_MEAT] == 95);
+    assert(g.stolen_wood == 10 && g.stolen_fur == 5 && g.stolen_meat == 5);
+    // 存量穿底:只偷实际有的(原版 addStolen 的 short 口径);
+    // 木未被穿底,同一拍照常 -10(累计 20)
+    g.res[DR_RES_FUR] = 3;
+    for (uint32_t t = 13; t <= 21; t++) (void)dr_rules_tick(&rt, &g, t * 1000u, &ev, &arg);
+    assert(g.res[DR_RES_FUR] == 0);
+    assert(g.stolen_fur == 8);   // 5 + 3(余量)
+    assert(g.res[DR_RES_WOOD] == wood_before - 20 && g.stolen_wood == 20);
+
+    // 了结(吊死/放过都置 2)后不再偷
+    g.thieves_lv = 2;
+    g.flags &= ~((uint64_t)1u << DR_FLAG_THIEF_ACTIVE);
+    g.res[DR_RES_WOOD] = 1000;
+    for (uint32_t t = 22; t <= 31; t++) (void)dr_rules_tick(&rt, &g, t * 1000u, &ev, &arg);
+    assert(g.res[DR_RES_WOOD] == 1000);
+    assert(g.stolen_wood == 20);   // 未追回,等事件效果处理
+}
+
+// 离线结算同口径:窃贼进行中离线,每 tick 偷一轮,存量钳 0
+static void test_thieves_offline(void) {
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    g.thieves_lv = 1;
+    g.res[DR_RES_WOOD] = 100000; g.res[DR_RES_FUR] = 1000; g.res[DR_RES_MEAT] = 1000;
+    dr_rules_rt_t rt;
+    dr_rules_rt_init(&rt, &g, 0);
+    dr_offline_yield_t y;
+    // 离线 100s = 10 tick:偷 木100/毛50/肉50(仓库足够,不穿底)
+    (void)dr_rules_offline_settle(&rt, &g, 1000u + 100u, 0, &y);
+    assert(y.stolen_wood == 100 && y.stolen_fur == 50 && y.stolen_meat == 50);
+    assert(g.res[DR_RES_WOOD] == 100000 - 100 + y.wood);   // 离线还有采集收入
+    assert(g.stolen_wood == 100);
+}
+
 int main(void) {
     test_building_costs();
     test_build_gates();
@@ -498,6 +565,8 @@ int main(void) {
     test_offline();
     test_miner_jobs();
     test_craft();
+    test_thieves();
+    test_thieves_offline();
     printf("test_dr_rules: all passed\n");
     return 0;
 }
