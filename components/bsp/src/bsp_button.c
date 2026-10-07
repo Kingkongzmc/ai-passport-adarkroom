@@ -163,3 +163,10 @@ int bsp_button_read_mv(void) {
     if (adc_cali_raw_to_voltage(s_cali, raw, &mv) != ESP_OK) return -1;
     return mv;
 }
+
+bool bsp_button_mv_in_window(bsp_btn_t btn) {
+    if ((int)btn < 0 || (int)btn >= BSP_BTN_COUNT) return false;
+    int mv = bsp_button_read_mv();
+    if (mv < 0) return true;   // 读不到电压时不误伤真实按键
+    return mv >= BTN_MV[btn][0] && mv <= BTN_MV[btn][1];
+}

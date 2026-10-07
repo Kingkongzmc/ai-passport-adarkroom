@@ -310,6 +310,14 @@ static lv_obj_t *s_t_ok;
 // 地形纹样描述符(定义见文件后部,图例在此先取址)
 static const lv_image_dsc_t k_pat_dots, k_pat_hstrip, k_pat_diag;
 
+// I33:幽灵键窗锚点挂"flush 完成"——真正的电流尖峰在 esp_lvgl_port 任务的
+// 刷新/DMA 里,重负载页可拖到布局写完 60ms 之后,只锚 render() 会漏。
+// 回调运行于持同一把 LVGL 锁的移植层任务,uint32 写读无需额外同步。
+static void on_flush_finish(lv_event_t *e) {
+    (void)e;
+    s.last_render_ms = (uint32_t)(esp_timer_get_time() / 1000);
+}
+
 static void build_ui(void) {
     s_scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(s_scr, lv_color_hex(COL_BG), 0);
@@ -580,6 +588,8 @@ static void build_ui(void) {
     }
 
     lv_screen_load(s_scr);
+    lv_display_add_event_cb(lv_display_get_default(), on_flush_finish,
+                            LV_EVENT_FLUSH_FINISH, NULL);
 }
 
 // ===================================================================
@@ -2247,10 +2257,12 @@ static void tick(lv_timer_t *t) {
         s_heap_log_ms = now_ms;
         lv_mem_monitor_t mon;
         lv_mem_monitor(&mon);
-        ESP_LOGI(TAG, "sys=%u lvpool=%u(%u%%) frag=%u page=%d",
+        // I33 取证:行尾 mv=GPIO0 分压实测(定位光标自走后撤)
+        ESP_LOGI(TAG, "sys=%u lvpool=%u(%u%%) frag=%u page=%d mv=%d",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
                  (unsigned)(mon.free_size), (unsigned)mon.used_pct,
-                 (unsigned)mon.frag_pct, (int)s.page);
+                 (unsigned)mon.frag_pct, (int)s.page,
+                 bsp_button_read_mv());
     }
     if (s.toast[0] && (int32_t)(now_ms - s.toast_until_ms) >= 0) {
         s.toast[0] = '\0';
@@ -2384,11 +2396,21 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     if (btn != BSP_BTN_UP && btn != BSP_BTN_DOWN && btn != BSP_BTN_OK) return;
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     if (now_ms - s.boot_ms < 1500u) return;  // 开机防抖
-    s.last_input_ms = now_ms;                // 任何真实按键重置熄屏计时
     if (s.screen_off) {                      // 任意键唤醒,唤醒键吞掉不触发游戏动作
+        s.last_input_ms = now_ms;            // 唤醒本身也算一次输入
         screen_wake();
         return;
     }
+    // 幽灵键双闸(I33):按下沿看"渲染/flush 后静默期"——渲染电流尖峰制造的
+    // 幽灵按键紧贴渲染出现;长按与连调看"实测电压是否仍在该键窗口内"——真实
+    // 按住读数居窗口正中,轨塌/漏电型幽灵骑在边界,一测即穿帮。
+    // 被拒的键不重置熄屏计时(否则幽灵风暴会让自动熄屏永远不触发)。
+    if (ev == BSP_BTN_PRESS) {
+        if (now_ms - s.last_render_ms < 60u) return;
+    } else if (!bsp_button_mv_in_window(btn)) {
+        return;
+    }
+    s.last_input_ms = now_ms;                // 通过鉴别的按键才重置熄屏计时
 
     // 连调:长按期间周期事件——调节态按住上/下自动步进(节流 ~10 步/s;
     // 组件原始周期 20ms 过快)。其他场景忽略(翻页/确定不做连发)。
@@ -2419,8 +2441,7 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     }
 
     if (ev == BSP_BTN_PRESS) {
-        // 渲染静默期:渲染电流尖峰制造的幽灵按键紧贴渲染出现
-        if (now_ms - s.last_render_ms < 60u) return;
+        // 幽灵键窗已在函数头统一鉴别(I33),这里直接进动作分发
         // 出发整备调配:上/下=±1,确定=切下一项(干肉→药→子弹→完成)
         if (s.page == PG_MAP && s.outfit_adj >= 0) {
             static const uint8_t outfit_res[3] = {
@@ -2628,6 +2649,9 @@ static void key_task(void *arg) {
     key_event_t ke;
     while (!s_key_quit) {
         if (xQueueReceive(s_key_queue, &ke, pdMS_TO_TICKS(200)) == pdTRUE) {
+            // I33 取证:每个按键事件附当时分压读数(仅日志,零行为变更;定位后撤)
+            ESP_LOGI(TAG, "diag key btn=%d ev=%d mv=%d",
+                     (int)ke.btn, (int)ke.ev, bsp_button_read_mv());
             if (bsp_lvgl_lock(250)) {
                 handle_key(ke.btn, ke.ev);
                 render();
@@ -2687,7 +2711,7 @@ void darkroom_app_enter(void) {
                 // 锚点已被结算推进,立刻落盘——否则断电会让同一离线窗口重复结算
                 s.save_pending = true;
                 if (oy.wood || oy.fur || oy.meat || oy.leather || oy.food) {
-                    char line[64];
+                    char line[80];   // 五段数值全满 68 字节,64 会截尾
                     snprintf(line, sizeof(line),
                              "离线:木+%lu 毛+%lu 肉+%lu 革+%lu 干+%lu",
                              (unsigned long)oy.wood, (unsigned long)oy.fur,
@@ -2696,7 +2720,7 @@ void darkroom_app_enter(void) {
                     log_push(line);
                 }
                 if (oy.stolen_wood || oy.stolen_fur || oy.stolen_meat) {
-                    char line[64];
+                    char line[80];   // 三段数值全满 63 字节,与上行对齐留量
                     snprintf(line, sizeof(line),
                              "离线:库房被偷 木%lu 毛%lu 肉%lu",
                              (unsigned long)oy.stolen_wood,

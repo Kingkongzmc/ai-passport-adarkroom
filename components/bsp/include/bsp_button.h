@@ -2,6 +2,8 @@
 // 三个按键共用一个 ADC 引脚,靠分压电阻区分。电压窗口见 bsp_pins.h。
 #pragma once
 
+#include <stdbool.h>
+
 #include "esp_err.h"
 
 // 按键索引。数量用 bsp_pins.h 的 BSP_BTN_COUNT(硬件属性,归引脚表管),
@@ -31,3 +33,8 @@ esp_err_t bsp_button_init(bsp_btn_cb_t cb, void *user);
 // ★ 换了分压/上拉阻值后,用它测出自己的三档电压,再改 bsp_pins.h 的 BSP_BTN_MV_TABLE。
 // 读取失败返回 -1。
 int bsp_button_read_mv(void);
+
+// 实测电压是否落在该键窗口内(幽灵键鉴别,I33):真实按住时读数居窗口正中,
+// 轨塌/漏电型幽灵长按与连调骑在窗口边界,一测即穿帮。读取失败返回 true
+// (不误伤真实长按);btn 非法返回 false。
+bool bsp_button_mv_in_window(bsp_btn_t btn);
