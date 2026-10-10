@@ -2557,7 +2557,7 @@ static void list_action(int idx) {
         }
         case PG_SETTINGS:
             if (idx == 6) page_goto(PG_HOME);
-            else if (idx == 0) log_push("上/下选择 · 确定执行 · 长按返回");
+            else if (idx == 0) log_push("上下/确定/长按返回/双击下熄屏");
             else if (idx == 1) {                       // 重开本局:需确认
                 s.confirm_from = 0;
                 page_goto(PG_CONFIRM);
@@ -2568,7 +2568,7 @@ static void list_action(int idx) {
                 uint8_t lv = (uint8_t)((scr_off_level() + 1) % 5);
                 s.game._rsv[1] = lv;
                 s.save_pending = true;
-                log_push(lv ? "熄屏已开,长按下键手动熄屏" : "熄屏已关");
+                log_push(lv ? "熄屏已开,双击下键手动熄屏" : "熄屏已关");
             }
             else {                                     // 关于:版本 + 通关纪录
                 log_push("《小黑屋》A Dark Room 重制 v0.7");
@@ -2905,7 +2905,6 @@ static bool nav_tab_enabled(int i) {
 }
 
 static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
-    if (ev != BSP_BTN_PRESS && ev != BSP_BTN_LONG && ev != BSP_BTN_HOLD) return;
     if (btn != BSP_BTN_UP && btn != BSP_BTN_DOWN && btn != BSP_BTN_OK) return;
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     if (now_ms - s.boot_ms < 1500u) return;  // 开机防抖
@@ -2914,6 +2913,13 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
         screen_wake();
         return;
     }
+    // 双击下键 = 手动熄屏(I38:原"长按下键熄屏"与 I37 连发滚动抢手势——
+    // 组件 1500ms 先发 LONG(熄屏)后发 HOLD(连发),按住下键滚动必被熄屏打断)
+    if (btn == BSP_BTN_DOWN && ev == BSP_BTN_DOUBLE) {
+        screen_off_now();
+        return;
+    }
+    if (ev != BSP_BTN_PRESS && ev != BSP_BTN_LONG && ev != BSP_BTN_HOLD) return;
     // 幽灵键双闸(I33):按下沿看"渲染/flush 后静默期"——渲染电流尖峰制造的
     // 幽灵按键紧贴渲染出现;长按与连调看"实测电压是否仍在该键窗口内"——真实
     // 按住读数居窗口正中,轨塌/漏电型幽灵骑在边界,一测即穿帮。
@@ -3142,11 +3148,7 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
             s.dirty = true;
             return;
         }
-        // 长按下键=手动熄屏(村庄调节分支已在上方 return;无电源键的设备形态)
-        if (btn == BSP_BTN_DOWN) {
-            screen_off_now();
-            return;
-        }
+        // 长按下键不再熄屏(I38:让位给连发滚动;手动熄屏=双击下键)
         if (btn != BSP_BTN_OK) return;
         // 危险操作的长按快捷路径:同样走确认弹窗(与按下确定一致)
         if (s.page == PG_SETTINGS && s.focus == 1) {
