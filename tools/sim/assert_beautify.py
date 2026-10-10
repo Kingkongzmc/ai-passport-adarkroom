@@ -75,6 +75,14 @@ CASES = {
   "fire_top":      ("火光带顶部透明", "p", 100, 256, PANEL, 6),
   "fire_bottom":   ("火光带底部余烬", "p", 100, 276, (0x60, 0x40, 0x24), 16),
   "title_big":     ("大标题金", "b", 60, 88, 138, 120, GOLD, 6),
+  # ---- T5 结构面板 ----
+  "logpanel_bg":    ("日志面板深底", "p", 100, 150, (0x0D, 0x0D, 0x0D), 4),
+  "logpanel_edge":  ("日志面板左边框", "p", 0, 150, RULE, 8),
+  "jobpanel_bg":    ("职业窗面板深底", "p", 60, 130, (0x0D, 0x0D, 0x0D), 4),
+  "jobpanel_edge":  ("职业窗面板上边框", "p", 60, 117, RULE, 8),
+  "settings_sep":   ("设置危险分隔线", "p", 100, 75, RULE, 8),
+  "event_border":   ("事件非焦点选项描边", "n2", 12, 164, 160, 235, (0x57, 0x53, 0x4E), 150),
+  "confirm_border": ("确认非焦点选项描边", "n2", 12, 175, 160, 235, (0x57, 0x53, 0x4E), 150),
   "combat_title":  ("战斗标题敌红", "b", 0, 0, 40, 20, ENEMY, 3),
   "liftoff_title": ("升空标题金豁免", "b", 0, 0, 40, 20, GOLD, 2),
   "ending_title":  ("结局标题金豁免", "b", 0, 0, 40, 20, GOLD, 4),
@@ -106,6 +114,17 @@ def main():
                     if abs(g[0]-28) + abs(g[1]-25) + abs(g[2]-23) > 24: n += 1
             ok = n >= least
             detail = f"box({x0},{y0})-({x1},{y1}) 非背景 {n} px (需≥{least})"
+            print(f"[{'PASS' if ok else 'FAIL'}] {name} ({desc}): {detail}")
+            if not ok: fails += 1
+            continue
+        if mode == "n2":  # 盒内指定色像素计数(1px 描边框)
+            _, _, x0, y0, x1, y1, exp, least = case
+            n = 0
+            for yy in range(c(x0, y0)[1], c(x1, y1)[1]):
+                for xx in range(c(x0, y0)[0], c(x1, y1)[0]):
+                    if close(px[xx, yy], exp, 12): n += 1
+            ok = n >= least
+            detail = f"box({x0},{y0})-({x1},{y1}) 命中 {n} px (需≥{least})"
             print(f"[{'PASS' if ok else 'FAIL'}] {name} ({desc}): {detail}")
             if not ok: fails += 1
             continue

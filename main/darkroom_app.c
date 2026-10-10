@@ -163,6 +163,8 @@ static lv_obj_t *s_cells[8];
 static lv_obj_t *s_loglines[LOG_VIS];
 static lv_obj_t *s_hint;
 static lv_obj_t *s_rule, *s_tick;   // 页头规则线+accent 短色条(T2,最底层)
+static lv_obj_t *s_logpanel, *s_jobpanel;   // 日志/职业窗内嵌面板(T5,最底层)
+static lv_obj_t *s_sep;             // 设置页危险项分隔线(T5)
 static lv_obj_t *s_strack, *s_sthumb;   // 滚动指示条:右缘轨道+滑块(村庄/制造窗)
 // 动作行:容器 + 冷却填充 + 箭头 + 文字(主页/战斗/弹窗选项共用骨架)
 typedef struct {
@@ -439,6 +441,35 @@ static void build_ui(void) {
     lv_obj_set_style_pad_all(s_tick, 0, 0);
     lv_obj_clear_flag(s_tick, LV_OBJ_FLAG_SCROLLABLE);
 
+    // 内嵌面板(T5,最底层):主页日志区/村庄职业窗的"叙事底板"——
+    // 深一档底色+1px 分隔线框,把叙事与操作分开;位置尺寸各页渲染时定
+    s_logpanel = lv_obj_create(s_content);
+    lv_obj_set_pos(s_logpanel, 0, 86);
+    lv_obj_set_size(s_logpanel, 198, 140);
+    lv_obj_set_style_radius(s_logpanel, 3, 0);
+    lv_obj_set_style_bg_color(s_logpanel, lv_color_hex(COL_BG), 0);
+    lv_obj_set_style_border_color(s_logpanel, lv_color_hex(COL_RULE), 0);
+    lv_obj_set_style_border_width(s_logpanel, 1, 0);
+    lv_obj_set_style_pad_all(s_logpanel, 0, 0);
+    lv_obj_clear_flag(s_logpanel, LV_OBJ_FLAG_SCROLLABLE);
+    s_jobpanel = lv_obj_create(s_content);
+    lv_obj_set_pos(s_jobpanel, 0, 117);
+    lv_obj_set_size(s_jobpanel, 192, 118);
+    lv_obj_set_style_radius(s_jobpanel, 3, 0);
+    lv_obj_set_style_bg_color(s_jobpanel, lv_color_hex(COL_BG), 0);
+    lv_obj_set_style_border_color(s_jobpanel, lv_color_hex(COL_RULE), 0);
+    lv_obj_set_style_border_width(s_jobpanel, 1, 0);
+    lv_obj_set_style_pad_all(s_jobpanel, 0, 0);
+    lv_obj_clear_flag(s_jobpanel, LV_OBJ_FLAG_SCROLLABLE);
+    s_sep = lv_obj_create(s_content);
+    lv_obj_set_pos(s_sep, 0, 75);
+    lv_obj_set_size(s_sep, 198, 1);
+    lv_obj_set_style_radius(s_sep, 0, 0);
+    lv_obj_set_style_bg_color(s_sep, lv_color_hex(COL_RULE), 0);
+    lv_obj_set_style_border_width(s_sep, 0, 0);
+    lv_obj_set_style_pad_all(s_sep, 0, 0);
+    lv_obj_clear_flag(s_sep, LV_OBJ_FLAG_SCROLLABLE);
+
     // 顶栏:标题(0,0,110,20 f12) + 电池(150,2,48,15 f12 右对齐)
     s_topbar = label_new(s_content, &dr_font_12, lv_color_hex(COL_GOLD), 0, 0, 110, 20);
     lv_label_set_text(s_topbar, "小黑屋");
@@ -474,7 +505,7 @@ static void build_ui(void) {
     // 日志逐行标签(0,90 起,行高自适应;位置/显隐/颜色由 render_home_log 管理)
     for (int i = 0; i < LOG_VIS; i++) {
         s_loglines[i] = label_new(s_content, &dr_font_12,
-                                  lv_color_hex(COL_DIM), 0, 90 + i * 15, 198, 15);
+                                  lv_color_hex(COL_DIM), 0, 90 + i * 15, 194, 15);
         lv_obj_add_flag(s_loglines[i], LV_OBJ_FLAG_HIDDEN);
     }
 
@@ -885,12 +916,16 @@ static void render_home_log(int n_acts, int act_top) {
     int max_lines = (act_top - 90) / pitch;
     int show = max_lines;
     if (show > LOG_VIS) show = LOG_VIS;
+    // 日志内嵌面板(T5):叙事区与操作区分隔,随动作行数自适应
+    lv_obj_clear_flag(s_logpanel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(s_logpanel, 0, 86);
+    lv_obj_set_size(s_logpanel, 198, act_top - 90);
     for (int i = 0; i < LOG_VIS; i++) {
         lv_obj_t *l = s_loglines[i];
         if (i >= show) { lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN); continue; }
         const char *e = log_entry_newest_first(i);
         if (!e) { lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN); continue; }
-        lv_obj_set_pos(l, 0, 90 + i * pitch);
+        lv_obj_set_pos(l, 4, 90 + i * pitch);   // 面板内缩进 4px
         lv_obj_clear_flag(l, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(l, e);
         lv_obj_set_style_text_color(l, log_fade(i, show, log_base(i)), 0);
@@ -963,6 +998,9 @@ static void clear_scene(void) {
     lv_obj_add_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_rule, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_tick, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_logpanel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_jobpanel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_sep, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_strack, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_sthumb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_t_big, LV_OBJ_FLAG_HIDDEN);
@@ -1263,6 +1301,10 @@ static void render_village(void) {
         set_row(r, 121 + (r - 3) * 23, job_names[job], v,
                 s.focus == r, !ok);
     }
+    // 职业窗内嵌面板(T5):罩住 5 行窗,右缘让开滚动轨道
+    lv_obj_clear_flag(s_jobpanel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(s_jobpanel, 0, 117);
+    lv_obj_set_size(s_jobpanel, 192, 118);
     set_row(8, 236, adj ? "完成调节" : "返回", "", s.focus == 8, false);
 
     // 滚动指示条:9 职业装不进 5 行窗,右缘轨道+滑块标示窗口位置(I22)
@@ -1725,6 +1767,11 @@ static void render_settings(void) {
     // 9 行,步 25(52 起,尾行 252+22=274 收进内容区 278)
     set_row(0, 52, "操作说明", "键位:三键", s.focus == 0, false);
     set_row(1, 77, "重开本局", "需确认", s.focus == 1, false);
+    // 危险项分隔线+红字(T5);焦点反色时墨字优先
+    lv_obj_clear_flag(s_sep, LV_OBJ_FLAG_HIDDEN);
+    if (s.focus != 1)
+        lv_obj_set_style_text_color(s_list[1].t,
+                                    lv_color_hex(COL_ENEMY), 0);
     char about[28];   // 关于行:版本 + 周目(M5 周目继承;缓冲按 %u 满宽留量)
     snprintf(about, sizeof(about), "v0.7·第%u周目",
              (unsigned)(s.game.prestige_count + 1u));
@@ -1865,18 +1912,20 @@ static void render_event(void) {
         lv_obj_clear_flag(a->row, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_pos(a->row, 0, 164 - (e->choice_count - 1 - i) * 24);
         set_act(a, ev_choice_label(e, i), s.focus == i, 0);
+        // 选项常态描边(T5);焦点反色行由 set_act 去边
+        lv_obj_set_style_border_width(a->row, s.focus == i ? 0 : 1, 0);
+        lv_obj_set_style_border_color(a->row, lv_color_hex(COL_BORDER), 0);
         bool ok = dr_event_choice_affordable(e, (uint8_t)i, &s.game);
         // 斥候"买地图":迷雾揭完则无可买(原版 available: !World.seenAll)
         if (e->text_id == DR_T_EV_SCOUT &&
             e->choices[i].text_id == DR_T_EV_SCOUT_MAP &&
             !dr_world_map_has_unseen(&s_world))
             ok = false;
-        if (!ok) {   // 不可付:永不反色——灰字,焦点降级为金描边(T1)
+        if (!ok) {   // 不可付:永不反色——灰字,焦点=金描边/常态=灰描边(T1)
             lv_obj_set_style_bg_opa(a->row, LV_OPA_TRANSP, 0);
-            lv_obj_set_style_border_width(a->row, s.focus == i ? 1 : 0, 0);
-            if (s.focus == i)
-                lv_obj_set_style_border_color(a->row,
-                                              lv_color_hex(COL_GOLD), 0);
+            lv_obj_set_style_border_width(a->row, 1, 0);
+            lv_obj_set_style_border_color(a->row,
+                lv_color_hex(s.focus == i ? COL_GOLD : COL_BORDER), 0);
             lv_obj_set_style_text_color(a->lbl, lv_color_hex(COL_DIM), 0);
         }
     }
@@ -1906,9 +1955,12 @@ static void render_confirm(void) {
                 s.confirm_from == 2 ? (i == 0 ? "升空" : "再待会儿")
                                     : (i == 0 ? "确认执行" : "取消"),
                 s.focus == i, 0);
+        // 选项常态描边(T5);焦点反色行由 set_act 去边
+        lv_obj_set_style_border_width(a->row, s.focus == i ? 0 : 1, 0);
+        if (s.focus != i)
+            lv_obj_set_style_border_color(a->row,
+                                          lv_color_hex(COL_BORDER), 0);
     }
-    for (int i = 2; i < 4; i++)
-        lv_obj_add_flag(s_dacts[i].row, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ---- 制造页(工坊建成后从小屋页进入;原版 crafts,§9.7) ----
