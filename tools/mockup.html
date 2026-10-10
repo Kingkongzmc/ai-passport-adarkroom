@@ -2,24 +2,24 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>小黑屋 · 竖屏 240×320 像素级切片 v6(LVGL 同构,与固件实装一比一)</title>
+<title>小黑屋 · 竖屏 240×320 像素级切片 v7(LVGL 同构,与固件实装一比一)</title>
 <style>
   /* ============================================================
-     切片规范 v6 · 竖屏 240×320 · 与固件实装一比一(2026-10-07)
-     v5→v6 同步上游:①f16 并入 f12(正文全 12px,弹窗折行 28 半格);
-     ②f24 行高 29→24(10 字标题冻结闭集);③列表行 t 列 58/v 列 120;
-     ④主页动作行底部对齐;⑤建造 11 行 pitch19/村庄职业窗/制造滚窗;
-     ⑥荒野拆整备+远征两态,地图左移 @(14,44),全量图例双列 @116/158;
-     ⑦色弱适配新地形色板+三地形纹样(森林白点/田野黑横线/荒地黑斜线);
-     ⑧战斗名行 HP u/u、动作 pitch22;⑨事件弹窗真实文案+代价灰显;
-     ⑩就地结果提示条 toast(金色 2s,覆盖提示行)。
-     层级:scr(240×320,设备外壳) > panel(240×320@0,0 全屏无边框,
-     pad 8) > content(198×278 @13,13 居中) > 各元素(绝对坐标)。
-     弹窗层(veil/dpanel)是 scr 的子级,盖在 panel 之上。
-     字号: f12=12px(行高15) f24=24px(行高24,仅"小黑屋/确认操作")
+     切片规范 v7 · 竖屏 240×320 · 与固件实装一比一(2026-10-11)
+     v6→v7 同步:M5/M6/M7 现状(5 页签/18 页/战斗 ≤6 动作/事件 5 选项/
+     设置 9 行/存档码导出导入/升空结局叙事页)+ 美化 T1-T5:
+     T1 焦点反色(金底墨字;冷却/不可付=描边;锁定永不反色)
+     T2 场景身份(页标题 accent+页头规则线/短色条)
+     T3 标题页(顶饰线/火光带/副标题打字机)
+     T4 语义色(HP 阈值+名行红蓝+战报主语色+告急红+危险 toast 红)
+     T5 结构面板(日志/职业窗内嵌面板+选项描边+设置分隔线)
+     层级:scr(240×320) > panel(pad 8) > content(198×278 @13,13)。
+     字号: f12=12px(行高15) f24=24px(行高24,仅"小黑屋/确认操作"等冻结闭集)
      颜色: BG #0D0D0D | PANEL #1C1917 | BORDER #57534E | TEXT #E7E5E4
-           DIM #A8A29E | GOLD #FFD928 | CD #3A3A44 | 锁 #57534E
-           我 #66B2FF | 敌 #E43B2F | 格边 #33302C
+           DIM #A8A29E | GOLD #FFD928 | CD #3A3A44 | RULE #33302C
+           我 #66B2FF | 敌 #E43B2F | AMBER #E08A3C
+     accent: 主页 #E08A3C 森林 #7FB55C 荒野 #C7A87E 建造/老屋 #C9986B
+             贸易 #6FC9C9 制造/制造台 #A9A9B5 星舰 #D49BE8
      ============================================================ */
   *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
   html, body { margin:0; padding:0; }
@@ -34,10 +34,8 @@
   .scr  { position:relative; width:240px; height:320px;
           background:#0D0D0D; border:12px solid #1f1f22; border-radius:14px;
           margin-bottom:8px; overflow:hidden; }
-  /* 面板全屏铺满:无边框无圆角,pad 8(内容距屏幕边 8px,不贴边) */
   .panel{ position:absolute; left:0px; top:0px; width:240px; height:320px;
           background:#1C1917; border:none; padding:8px; border-radius:0; }
-  /* 内容区 198×278 在面板可用区(224×304)内居中:左/上各 13px */
   .content{ position:absolute; left:13px; top:13px; width:198px; height:278px; }
   .el   { position:absolute; }
   .txtblk { position:absolute; white-space:nowrap; overflow:hidden; }
@@ -48,81 +46,96 @@
   .gold { color:#FFD928; } .dim { color:#A8A29E; }
   .text { color:#E7E5E4; } .lock { color:#57534E; }
   .bold { font-weight:bold; }
+  /* T2 页面 accent(顶栏标题) */
+  .a-home{color:#E08A3C} .a-forest{color:#7FB55C} .a-wild{color:#C7A87E}
+  .a-build{color:#C9986B} .a-trade{color:#6FC9C9} .a-craft{color:#A9A9B5}
+  .a-ship{color:#D49BE8} .a-enemy{color:#E43B2F} .a-dim{color:#A8A29E}
 
   .ctr { text-align:center; }
-  .act.ctr .txt { left:0; width:100%; text-align:center; }
   .cell { position:absolute; height:15px; white-space:nowrap; overflow:hidden; }
   .cell .k { color:#A8A29E; }
 
-  /* 动作行 198×22:容器 + 冷却矩形 + 箭头列(10px,f12 收口)+ 文字(12,1)。
-     焦点样式 = 金色文字 + 箭头,无边框 */
+  /* T1 动作行:焦点=整行反色金底墨字;冷却焦点=1px 金描边金字 */
   .act  { position:absolute; width:198px; height:22px;
           border-radius:3px; overflow:hidden; }
   .act .fill { position:absolute; left:1px; top:1px; bottom:1px;
                background:#3A3A44; border-radius:2px; }
   .act .txt  { position:absolute; left:12px; top:1px; height:20px;
                line-height:20px; width:172px; }
-  .act.focus .txt { color:#FFD928; }
-  /* 固定宽度箭头列 10px:焦点 ">",非焦点空白,文字零位移 */
+  .act.focus { background:#FFD928; }
+  .act.focus .txt { color:#0D0D0D; }
+  .act.focus .txt::before { content:">"; color:#0D0D0D; }
+  .act.cd { border:1px solid #FFD928; }
+  .act.cd .txt { color:#FFD928; }
+  .act.cd .txt::before { content:">"; color:#FFD928; }
   .act .txt::before { content:""; display:inline-block; width:10px; }
-  .act.focus .txt::before { content:">"; color:#FFD928; }
   .act.nocur .txt::before { content:none; }
 
-  /* 列表行 198×22:箭头列(10px)+ 名称(14,1,w58)+ 值(72,1,w120 右对齐) */
+  /* T1 列表行:焦点反色;锁定永不反色 */
   .row  { position:absolute; width:198px; height:22px;
           border-radius:3px; overflow:hidden; }
   .row .mark { position:absolute; left:4px; top:1px; width:10px; height:20px;
                font-size:12px; line-height:20px; color:#FFD928;
                visibility:hidden; }
-  .row.focus .mark { visibility:visible; }
-  .row.focus .t { color:#FFD928; }
   .row .t { position:absolute; left:14px; top:1px; height:20px;
             font-size:12px; line-height:20px; color:#E7E5E4;
             white-space:nowrap; overflow:hidden; width:58px; }
   .row .v { position:absolute; left:72px; top:1px; width:120px; height:20px;
             font-size:12px; line-height:20px; text-align:right; color:#A8A29E;
             white-space:nowrap; overflow:hidden; }
+  .row.focus { background:#FFD928; }
+  .row.focus .mark { visibility:visible; color:#0D0D0D; }
+  .row.focus .t, .row.focus .v { color:#0D0D0D; }
 
-  /* 导航栏 4×47×20,y=24。文字 + 底部指示线(激活=金色2px);
-     光标(焦点)= 完整金框 outline;锁定 tab 灰字 */
-  .tab { position:absolute; width:47px; height:20px; text-align:center;
+  /* 页签 5×38×20 @y24(M5):光标=金底墨字块;激活=金下划线;锁定=灰 */
+  .tab { position:absolute; width:38px; height:20px; text-align:center;
          font-size:12px; line-height:18px; color:#A8A29E;
          border:none; border-bottom:1px solid #3A3A44;
          white-space:nowrap; overflow:hidden; }
   .tab.on  { color:#FFD928; font-weight:bold; border-bottom:2px solid #FFD928; }
-  .tab.cur { outline:1px solid #FFD928; color:#FFD928; }
-  .tab.cur.lock { outline-color:#57534E; }
+  .tab.cur { background:#FFD928; color:#0D0D0D !important; font-weight:bold;
+             border-bottom:2px solid #FFD928; }
+  .tab.cur.lock { background:transparent; color:#57534E !important;
+                  outline:1px solid #57534E; }
   .tab.lock { color:#57534E; }
 
-  /* 弹窗层(scr 子级):veil 全屏遮罩;dpanel 金边 2px,水平居中 x=22 */
+  /* T2 页头规则线+accent 短色条 */
+  .rule { position:absolute; height:1px; background:#33302C; }
+  .rule.h2 { height:2px; }
+  .tk { position:absolute; height:2px; width:26px; }
+
+  /* 弹窗层:veil 全屏遮罩;dpanel 金边 2px,水平居中 x=22 */
   .veil { position:absolute; left:0; top:0; width:240px; height:320px; background:#101010; }
   .dpanel { position:absolute; left:22px; background:#1C1917; border:2px solid #FFD928;
             padding:10px; overflow:hidden; border-radius:4px; }
-  /* 子级坐标 = 面板内容原点。⚠ CSS 绝对定位的包含块是 padding box 原点,
-     padding 推不动绝对子级 —— 必须用 margin 复现 LVGL 的 pad_all(10) */
   .dpanel > .txtf, .dpanel > .txtblk, .dpanel > .act { margin:10px 0 0 10px; }
   .dpanel > .act { width:172px; }
-  .dpanel .act .txt { width:146px; }   /* 160-10-4,弹窗行文字宽 */
-  /* 选项底部锚定:最后一行固定 y=164,向上堆叠(间距 24) */
+  .dpanel .act .txt { width:146px; }
+  /* T5 弹窗选项:常态 1px 描边;焦点反色去边;不可付灰字+描边 */
+  .dact { border:1px solid #57534E; }
+  .dact.focus { border:none; background:#FFD928; }
+  .dact.dis .txt { color:#A8A29E; }
+  .dact.dis.focus { border:1px solid #FFD928; }
   .dpanel .dtitle { position:absolute; left:0; top:0; height:30px; font-size:24px;
                     line-height:24px; color:#FFD928; font-weight:bold; }
 
-  /* 主页日志:逐行 15px,最新在上,旧条目向背景渐隐(opacity) */
-  .logline { position:absolute; left:0px; width:198px; height:15px;
+  /* 主页日志(T5 内嵌面板+缩进 4;T4 主语色) */
+  .logpanel { position:absolute; background:#0D0D0D; border:1px solid #33302C;
+              border-radius:3px; }
+  .logline { position:absolute; left:4px; width:194px; height:15px;
              font-size:12px; line-height:15px; color:#E7E5E4;
              white-space:nowrap; overflow:hidden; }
-  /* 页底说明行(hint):各页说明 / 就地提示条 toast 态=金色 2s */
+  .log-me { color:#66B2FF; } .log-foe { color:#E43B2F; }
   .hint { position:absolute; left:0px; top:230px; width:198px; height:15px;
           font-size:12px; line-height:15px; color:#A8A29E;
           white-space:nowrap; overflow:hidden; }
-  .hint.toast { color:#FFD928; }
+  .hint.toast { color:#FFD928; } .hint.danger { color:#E43B2F; }
 
-  /* 荒野地图 9×10px 格 pitch11 @(14,44):1px 格边 #33302C */
+  /* 荒野地图 9×10px @(14,44) + 色弱纹样 */
   .map { position:absolute; left:14px; top:44px; width:98px; height:98px;
          display:grid; grid-template-columns:repeat(9,10px); grid-auto-rows:10px;
          gap:1px; }
   .m { border:1px solid #33302C; background:#0D0D0D; }
-  /* 地形纹样(色弱第二编码,与固件 k_pat_* 同构):森林白点/田野黑横线/荒地黑斜线 */
   .tF { background:#2E5E1E;
         background-image:radial-gradient(rgba(255,255,255,.35) 1.2px, transparent 1.3px);
         background-size:5px 5px; background-position:1px 1px; }
@@ -130,37 +143,52 @@
         background-image:repeating-linear-gradient(180deg, rgba(0,0,0,.45) 0 1px, transparent 1px 5px); }
   .tB { background:#967850;
         background-image:repeating-linear-gradient(45deg, rgba(0,0,0,.45) 0 1.2px, transparent 1.2px 5px); }
-
-  /* 全量图例双列(远征态,地图右侧):chip 10×10 + 短名(f12 dim) */
   .lchip { position:absolute; width:10px; height:10px; border-radius:1px; }
   .ltxt  { position:absolute; font-size:12px; line-height:14px; color:#A8A29E;
            white-space:nowrap; }
+
+  /* T4 血条:填充语义色+25/50/75% 刻度 */
+  .hpbar { position:absolute; width:198px; height:10px; background:#0D0D0D;
+           border:1px solid #57534E; }
+  .hpfill { position:absolute; left:1px; top:1px; height:8px; }
+  .hptick { position:absolute; top:1px; width:1px; height:8px; background:#1C1917; }
+
+  /* T3 标题页火光带(底部余烬渐变) */
+  .fireband { position:absolute; left:0px; top:254px; width:198px; height:24px;
+              border-radius:2px;
+              background:linear-gradient(180deg, rgba(224,138,60,0) 0%,
+                                         rgba(224,138,60,.35) 100%); }
+  /* T5 设置危险分隔线 */
+  .sep { position:absolute; height:1px; background:#33302C; }
 </style>
 </head>
 <body>
 
 <div class="item">
-<div class="label">① 标题页</div>
+<div class="label">① 标题页(T3:顶饰线+火光带+打字机)</div>
 <div class="scr"><div class="panel"><div class="content">
+  <div class="txtblk f12 dim ctr" style="left:0px; top:72px; width:198px;">───── · ─────</div>
   <div class="txtblk f24 gold bold ctr" style="left:0px; top:88px; width:198px;">小黑屋</div>
   <div class="txtblk f12 dim ctr" style="left:0px; top:124px; width:198px;">屋里冷得刺骨</div>
   <div class="act focus ctr nocur" style="left:39px; top:168px; width:120px;">
     <div class="txt f12 text">OK键开始</div>
   </div>
+  <div class="fireband"></div>
 </div>
 </div></div>
-<div class="spec">面板全屏 240×320 无边框 | 内容 198×278 @13,13 居中 | 大标题 f24@88(行高24) 按钮 f12</div>
+<div class="spec">T3:顶饰线@72(闭集字符) | 大标题 f24@88 | 副标题打字机 250ms/字 | 火光带 198×24@254 透明→35%AMBER | OK 金描边(不反色,仪式页豁免)</div>
 </div>
 
 <div class="item">
-<div class="label">② 主页 · 小黑屋(4 行动作 → 日志 6 行)</div>
+<div class="label">② 主页 · 小黑屋(T1 反色+T5 日志面板)</div>
 <div class="scr"><div class="panel"><div class="content">
-  <div class="txtblk f12 gold bold" style="left:0px; top:0px; width:100px;">小黑屋</div>
+  <div class="txtblk f12 a-home bold" style="left:0px; top:0px; width:100px;">小黑屋</div>
   <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">87%</div>
   <div class="tab on" style="left:0px; top:24px;">小屋</div>
-  <div class="tab" style="left:50px; top:24px;">村庄</div>
-  <div class="tab" style="left:100px; top:24px;">荒野</div>
-  <div class="tab" style="left:150px; top:24px;">≡</div>
+  <div class="tab" style="left:40px; top:24px;">村庄</div>
+  <div class="tab" style="left:80px; top:24px;">荒野</div>
+  <div class="tab" style="left:120px; top:24px;">星舰</div>
+  <div class="tab" style="left:160px; top:24px;">≡</div>
   <div class="cell f12 text" style="left:0px; top:48px;">火<span class="k">旺</span></div>
   <div class="cell f12 text" style="left:49px; top:48px;">人 <span class="k">2</span></div>
   <div class="cell f12 text" style="left:99px; top:48px;">阱 <span class="k">1</span></div>
@@ -169,15 +197,15 @@
   <div class="cell f12 text" style="left:49px; top:63px;">肉 <span class="k">2</span></div>
   <div class="cell f12 text" style="left:99px; top:63px;">诱 <span class="k">1</span></div>
   <div class="cell f12 text" style="left:148px; top:63px;">革 <span class="k">0</span></div>
+  <div class="logpanel" style="left:0px; top:86px; width:198px; height:140px;"></div>
   <div class="logline" style="top:90px;">火头正旺,先等等再添</div>
-  <div class="logline" style="top:105px; opacity:.78;">收集到 10 木</div>
-  <div class="logline" style="top:120px; opacity:.56;">让她留下</div>
-  <div class="logline" style="top:135px; opacity:.35;">陷阱收获:毛皮 诱饵</div>
+  <div class="logline log-me" style="top:105px; opacity:.78;">收集到 10 木</div>
+  <div class="logline" style="top:120px; opacity:.56;">她站在火边:可以帮忙了</div>
+  <div class="logline log-foe" style="top:135px; opacity:.35;">遭遇了嘶吼野兽!</div>
   <div class="logline" style="top:150px; opacity:.15;">添了柴,火烧得旺了些</div>
   <div class="logline" style="top:165px; opacity:.05;">屋里暖和起来了</div>
   <div class="act focus" style="left:0px; top:182px;">
-    <div class="fill" style="width:35%;"></div>
-    <div class="txt f12 gold">添柴中…</div>
+    <div class="txt f12">添柴(1木)</div>
   </div>
   <div class="act" style="left:0px; top:206px;">
     <div class="txt f12 text">建造…</div>
@@ -190,14 +218,16 @@
   </div>
 </div>
 </div></div>
-<div class="spec">8 资源格 y48/63 | 日志 6 行×15px @90(渐隐) | 动作底部对齐:gy=278-4×24=182 起 pitch24 | 冷却条铺行内宽</div>
+<div class="spec">T1:焦点行金底墨字(冷却中=金描边+金字+暗条) | T5:日志内嵌面板(86 至首动作行-4,行缩进 4px 宽 194) | T4:木=0 红字示例;日志主语色 我=蓝/敌=红/系统=白渐隐 | 动作底部对齐 gy=278-4×24</div>
 </div>
 
 <div class="item">
-<div class="label">③ 建造页(11 行 pitch19;不可付灰显+就地缺口)</div>
+<div class="label">③ 建造页(T2 木色+规则线;不可付灰显)</div>
 <div class="scr"><div class="panel"><div class="content">
-  <div class="txtblk f12 gold bold" style="left:0px; top:0px; width:100px;">建造</div>
+  <div class="txtblk f12 a-build bold" style="left:0px; top:0px; width:100px;">建造</div>
   <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">87%</div>
+  <div class="rule" style="left:0px; top:44px; width:198px;"></div>
+  <div class="tk" style="left:0px; top:44px; background:#C9986B;"></div>
   <div class="cell f12 text" style="left:0px; top:28px;">木 <span class="k">87</span></div>
   <div class="cell f12 text" style="left:49px; top:28px;">毛 <span class="k">12</span></div>
   <div class="cell f12 text" style="left:99px; top:28px;">肉 <span class="k">6</span></div>
@@ -216,42 +246,44 @@
   <div class="hint" style="top:262px;">采集木材收益 +50</div>
 </div>
 </div></div>
-<div class="spec">资源带@28 | 11 行@46+19i(尾行236) | v 列 120px 容最长缺口串 | 提示行@262=光标建筑作用</div>
+<div class="spec">T2:标题=老屋木色 accent | 规则线 y44 h1+左端 26×2 短色条 | 11 行@46+19i | 焦点跳过不可付行(全部不可付时落"返回")</div>
 </div>
 
 <div class="item">
-<div class="label">④ 事件弹窗 · 神秘的流浪者(M6 真实事件,含不可付灰选项)</div>
+<div class="label">④ 事件弹窗(T1 选项反色/描边+不可付灰)</div>
 <div class="scr">
 <div class="veil"></div>
 <div class="dpanel" style="top:42px; width:196px; height:236px;">
   <div class="txtf f12 text" style="left:0px; top:0px; width:176px; height:108px;">
     旅人拉着空车停在门口:给他木料,他会带回更多。建造者不太信他。
   </div>
-  <div class="act focus" style="left:0px; top:116px;">
-    <div class="txt f12 text">给木·100木</div>
+  <div class="act dact focus" style="left:0px; top:116px;">
+    <div class="txt f12">给木·100木</div>
   </div>
-  <div class="act" style="left:0px; top:140px;">
-    <div class="txt f12 dim">多给些木·500木</div>
+  <div class="act dact dis" style="left:0px; top:140px;">
+    <div class="txt f12">多给些木·500木</div>
   </div>
-  <div class="act" style="left:0px; top:164px;">
+  <div class="act dact" style="left:0px; top:164px;">
     <div class="txt f12 text">打发走</div>
   </div>
 </div></div>
-<div class="spec">遮罩全屏 | 弹窗196×236@(22,42) | 正文 f12 176×bh(3 选项时 bh=164-2×24-8=108,折行 28 半格=14 字/行) | 选项底部锚定(末行164 pitch24) | 不可付选项灰字可聚焦,OK 弹 toast</div>
+<div class="spec">M6:≤5 选项,底部锚定(末行164 pitch24) | T1:焦点=金底墨字无边框;不可付=灰字+灰描边,焦点时金描边(不反色) | 正文 f12 折行 28 半格</div>
 </div>
 
 <div class="item">
-<div class="label">⑤ 村庄页(采集/陷阱 + 职业滚窗 5 行 + 指示条)</div>
+<div class="label">⑤ 村庄页(T5 职业窗面板)</div>
 <div class="scr"><div class="panel"><div class="content">
-  <div class="txtblk f12 gold bold" style="left:0px; top:0px; width:100px;">村庄</div>
+  <div class="txtblk f12 a-forest bold" style="left:0px; top:0px; width:100px;">森林</div>
   <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">64%</div>
   <div class="tab" style="left:0px; top:24px;">小屋</div>
-  <div class="tab on" style="left:50px; top:24px;">村庄</div>
-  <div class="tab" style="left:100px; top:24px;">荒野</div>
-  <div class="tab" style="left:150px; top:24px;">≡</div>
+  <div class="tab on" style="left:40px; top:24px;">村庄</div>
+  <div class="tab" style="left:80px; top:24px;">荒野</div>
+  <div class="tab" style="left:120px; top:24px;">星舰</div>
+  <div class="tab" style="left:160px; top:24px;">≡</div>
   <div class="row focus" style="left:0px; top:52px;"><div class="mark">></div><div class="t">收集木材</div><div class="v">就绪</div></div>
   <div class="row" style="left:0px; top:75px;"><div class="mark"></div><div class="t">查看陷阱</div><div class="v">85s</div></div>
   <div class="row" style="left:0px; top:98px;"><div class="mark"></div><div class="t lock">采集者</div><div class="v">0人 +1木</div></div>
+  <div class="logpanel" style="left:0px; top:117px; width:192px; height:118px; border-radius:3px;"></div>
   <div class="row" style="left:0px; top:121px;"><div class="mark"></div><div class="t">猎人</div><div class="v">10人</div></div>
   <div class="row" style="left:0px; top:144px;"><div class="mark"></div><div class="t">捕兽人</div><div class="v">5人</div></div>
   <div class="row" style="left:0px; top:167px;"><div class="mark"></div><div class="t">制革匠</div><div class="v">5人</div></div>
@@ -263,40 +295,45 @@
   <div class="hint" style="top:264px;">每次 +10 木·板车 +50</div>
 </div>
 </div></div>
-<div class="spec">无资源带 | 行 52/75/98 + 职业窗 5 行@121+23i(窗 121..235) | 滚动指示条 x195 轨 h114/滑块 h63 | 返回@236 提示@264 | 调节模式长按=±5</div>
+<div class="spec">T2:标题=森林橄榄绿(第二页签名随定居进度 森林→村庄) | T5:职业窗面板 0,117,192×118(右缘让开轨道) | 5 行窗@121+23i</div>
 </div>
 
 <div class="item">
-<div class="label">⑥ 荒野 · 整备(无页签;出发前调配)</div>
+<div class="label">⑥ 荒野 · 整备(T2 规则线;长按连调)</div>
 <div class="scr"><div class="panel"><div class="content">
-  <div class="txtblk f12 gold bold" style="left:0px; top:0px; width:100px;">荒野</div>
+  <div class="txtblk f12 a-wild bold" style="left:0px; top:0px; width:100px;">荒野</div>
   <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">41%</div>
+  <div class="rule" style="left:0px; top:44px; width:198px; height:2px;"></div>
+  <div class="tk" style="left:0px; top:44px; background:#C7A87E;"></div>
   <div class="cell f12 text" style="left:0px; top:24px;">水 <span class="k">90</span></div>
   <div class="cell f12 text" style="left:49px; top:24px;">袋<span class="k">8.2</span></div>
   <div class="cell f12 text" style="left:99px; top:24px;">HP<span class="k">45</span></div>
   <div class="cell f12 text" style="left:148px; top:24px;">承<span class="k">110</span></div>
   <div class="row focus" style="left:0px; top:52px;"><div class="mark">></div><div class="t">干肉</div><div class="v">库9999 带10</div></div>
-  <div class="row" style="left:0px; top:78px;"><div class="mark"></div><div class="t">药</div><div class="v">库30 带0</div></div>
-  <div class="row" style="left:0px; top:104px;"><div class="mark"></div><div class="t">子弹</div><div class="v">库60 带0</div></div>
-  <div class="row" style="left:0px; top:130px;"><div class="mark"></div><div class="t lock">武器</div><div class="v">铁剑</div></div>
-  <div class="row" style="left:0px; top:156px;"><div class="mark"></div><div class="t lock">护甲</div><div class="v">铁甲 HP45</div></div>
-  <div class="row" style="left:0px; top:182px;"><div class="mark"></div><div class="t">出发远征</div><div class="v">就绪</div></div>
-  <div class="row" style="left:0px; top:208px;"><div class="mark"></div><div class="t">返回</div><div class="v"></div></div>
-  <div class="hint" style="top:238px;">干肉/药各占1,子弹10发占1</div>
+  <div class="row" style="left:0px; top:72px;"><div class="mark"></div><div class="t">药</div><div class="v">库30 带0</div></div>
+  <div class="row" style="left:0px; top:92px;"><div class="mark"></div><div class="t">子弹</div><div class="v">库60 带0</div></div>
+  <div class="row" style="left:0px; top:112px;"><div class="mark"></div><div class="t">元件</div><div class="v">库0 带0</div></div>
+  <div class="row" style="left:0px; top:132px;"><div class="mark"></div><div class="t lock">手雷</div><div class="v">库0 带0</div></div>
+  <div class="row" style="left:0px; top:152px;"><div class="mark"></div><div class="t lock">流星锤</div><div class="v">库0 带0</div></div>
+  <div class="row" style="left:0px; top:172px;"><div class="mark"></div><div class="t lock">武器</div><div class="v">铁剑</div></div>
+  <div class="row" style="left:0px; top:192px;"><div class="mark"></div><div class="t lock">护甲</div><div class="v">铁甲 HP45</div></div>
+  <div class="row" style="left:0px; top:212px;"><div class="mark"></div><div class="t">出发远征</div><div class="v">就绪</div></div>
+  <div class="row" style="left:0px; top:232px;"><div class="mark"></div><div class="t">返回</div><div class="v"></div></div>
+  <div class="hint" style="top:258px;">干肉/药各占1,子弹10发占1</div>
 </div>
 </div></div>
-<div class="spec">无页签 | 4 格@24(水=容量/袋=重量/HP=上限/承) | 7 行@52+26i | 调配模式:上下=±1 长按=5 确定切下一项 | 提示@238</div>
+<div class="spec">M5:携带行扩 6(干肉/药/子弹/元件/手雷/流星锤)@52+20i | T2:规则线 y44 h2 | 调配:确定=完成退出(I36),上下=±1 长按连发(I37)</div>
 </div>
 
 <div class="item">
-<div class="label">⑦ 荒野 · 远征(9×9 视口 + 全量图例双列 + 纹样)</div>
+<div class="label">⑦ 荒野 · 远征(方向记忆+断供红格)</div>
 <div class="scr"><div class="panel"><div class="content">
-  <div class="txtblk f12 gold bold" style="left:0px; top:0px; width:100px;">荒野</div>
+  <div class="txtblk f12 a-wild bold" style="left:0px; top:0px; width:100px;">荒野</div>
   <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">41%</div>
   <div class="cell f12 text" style="left:0px; top:24px;">水 <span class="k">86</span></div>
-  <div class="cell f12 text" style="left:49px; top:24px;">食 <span class="k">22</span></div>
+  <div class="cell f12 log-foe" style="left:49px; top:24px;">食 <span class="k">0</span></div>
   <div class="cell f12 text" style="left:99px; top:24px;">HP<span class="k">14/14</span></div>
-  <div class="cell f12 text" style="left:148px; top:24px;">里 <span class="k">4</span></div>
+  <div class="cell f12 log-foe" style="left:148px; top:24px;">里 <span class="k">4</span></div>
   <div class="map">
     <div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div>
     <div class="m"></div><div class="m" style="background:#FFD928;"></div><div class="m tF"></div><div class="m tF"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div>
@@ -308,7 +345,6 @@
     <div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div>
     <div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div><div class="m"></div>
   </div>
-  <!-- 图例左列 x116:森林/铁矿/田野/煤矿/荒地/硫矿/村庄 -->
   <i class="lchip tF" style="left:116px; top:46px;"></i><span class="ltxt" style="left:129px; top:44px;">森林</span>
   <i class="lchip" style="left:116px; top:60px; background:#707078;"></i><span class="ltxt" style="left:129px; top:58px;">铁矿</span>
   <i class="lchip tG" style="left:116px; top:74px;"></i><span class="ltxt" style="left:129px; top:72px;">田野</span>
@@ -316,7 +352,6 @@
   <i class="lchip tB" style="left:116px; top:102px;"></i><span class="ltxt" style="left:129px; top:100px;">荒地</span>
   <i class="lchip" style="left:116px; top:116px; background:#9B8C34;"></i><span class="ltxt" style="left:129px; top:114px;">硫矿</span>
   <i class="lchip" style="left:116px; top:130px; background:#FFD928;"></i><span class="ltxt" style="left:129px; top:128px;">村庄</span>
-  <!-- 图例右列 x158:老屋/你/洞穴/哨站/废镇/星舰/城市 -->
   <i class="lchip" style="left:158px; top:46px; background:#965F37;"></i><span class="ltxt" style="left:171px; top:44px;">老屋</span>
   <i class="lchip" style="left:158px; top:60px; background:#66B2FF;"></i><span class="ltxt" style="left:171px; top:58px;">你</span>
   <i class="lchip" style="left:158px; top:74px; background:#4B64BE;"></i><span class="ltxt" style="left:171px; top:72px;">洞穴</span>
@@ -331,48 +366,52 @@
   <div class="row" style="left:0px; top:256px;"><div class="mark"></div><div class="t">吃干肉</div><div class="v">余22</div></div>
 </div>
 </div></div>
-<div class="spec">无页签 | 4 格@24(里=离家距离,危险态红字) | 地图 98×98@(14,44) 色弱色板+三地形纹样 | 图例双列 x116/158 各 7 行 pitch14 | 方向行@168+22i(雾内显示"未知") | 长按方向=禁移</div>
+<div class="spec">T4:断供警告 水/食 红字(I32),危险"里"红 | 场景结束回地图焦点=上次行进方向(I35) | 长按方向=禁移 | 图例双列 14 项</div>
 </div>
 
 <div class="item">
-<div class="label">⑧ 战斗(回合制;3 行战报)</div>
+<div class="label">⑧ 战斗(T4 语义色;≤6 动作)</div>
 <div class="scr"><div class="panel"><div class="content">
-  <div class="txtblk f12 gold bold" style="left:0px; top:0px; width:100px;">战斗</div>
+  <div class="txtblk f12 a-enemy bold" style="left:0px; top:0px; width:100px;">战斗</div>
   <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">41%</div>
-  <div class="cell f12 text" style="left:0px; top:30px; width:198px;">嘶吼野兽 HP 3/5</div>
-  <div class="el" style="left:0px; top:46px; width:198px; height:10px; background:#0D0D0D; border:1px solid #57534E;">
-    <div class="el" style="left:1px; top:1px; width:118px; height:8px; background:#E43B2F;"></div>
+  <div class="cell f12 log-foe" style="left:0px; top:30px; width:198px;">嘶吼野兽 HP 3/5</div>
+  <div class="hpbar" style="left:0px; top:46px;">
+    <div class="hpfill" style="width:118px; background:#E43B2F;"></div>
+    <div class="hptick" style="left:50px;"></div><div class="hptick" style="left:99px;"></div><div class="hptick" style="left:148px;"></div>
   </div>
-  <div class="cell f12 text" style="left:0px; top:62px; width:198px;">你(铁剑) HP 11/14</div>
-  <div class="el" style="left:0px; top:78px; width:198px; height:10px; background:#0D0D0D; border:1px solid #57534E;">
-    <div class="el" style="left:1px; top:1px; width:155px; height:8px; background:#66B2FF;"></div>
+  <div class="cell f12 log-me" style="left:0px; top:62px; width:198px;">你(铁剑) HP 3/14</div>
+  <div class="hpbar" style="left:0px; top:78px;">
+    <div class="hpfill" style="width:42px; background:#E08A3C;"></div>
+    <div class="hptick" style="left:50px;"></div><div class="hptick" style="left:99px;"></div><div class="hptick" style="left:148px;"></div>
   </div>
-  <div class="logline" style="top:100px;">你挥剑命中,造成 6 伤害</div>
-  <div class="logline" style="top:115px; opacity:.6;">野兽扑咬,造成 3 伤害</div>
-  <div class="logline" style="top:130px; opacity:.35;">你挥剑命中,造成 5 伤害</div>
-  <div class="act focus" style="left:0px; top:168px;">
-    <div class="txt f12 text">攻击(铁剑)</div>
+  <div class="logline log-me" style="top:100px;">命中!</div>
+  <div class="logline log-foe" style="top:115px; opacity:.6;">它反击得手</div>
+  <div class="logline log-me" style="top:130px; opacity:.35;">挥空了</div>
+  <div class="act focus" style="left:0px; top:150px;">
+    <div class="txt f12">攻击(铁剑)</div>
   </div>
-  <div class="act" style="left:0px; top:190px;">
+  <div class="act" style="left:0px; top:170px;">
     <div class="txt f12 text">吃干肉(余22)</div>
   </div>
-  <div class="act" style="left:0px; top:212px;">
+  <div class="act" style="left:0px; top:190px;">
     <div class="txt f12 text">用药(余30)</div>
   </div>
-  <div class="act" style="left:0px; top:234px;">
+  <div class="act" style="left:0px; top:210px;">
     <div class="txt f12 text">逃跑</div>
   </div>
   <div class="hint" style="top:262px;">命中 80%·敌方按攻击间隔反击</div>
 </div>
 </div></div>
-<div class="spec">名30/条46/名62/条78(填充=HP 比例,恒敌红/我蓝) | 战报 3 行@100 渐隐 | 动作@168+22i 禁返回 | 提示@262</div>
+<div class="spec">T4:标题/名行/战报 敌红我蓝;HP 条 语义色(≤40% 琥珀/≤15% 红,示例 21%)+刻度 | M5:携带手雷/流星锤时插行(≤6 行 pitch20) | 战报 3 行@100</div>
 </div>
 
 <div class="item">
-<div class="label">⑨ 贸易站(只买不卖;不可付灰显)</div>
+<div class="label">⑨ 贸易站(T2 青色+规则线;M6 +元件/合金)</div>
 <div class="scr"><div class="panel"><div class="content">
-  <div class="txtblk f12 gold bold" style="left:0px; top:0px; width:100px;">贸易</div>
+  <div class="txtblk f12 a-trade bold" style="left:0px; top:0px; width:100px;">贸易</div>
   <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">64%</div>
+  <div class="rule" style="left:0px; top:42px; width:198px; height:2px;"></div>
+  <div class="tk" style="left:0px; top:42px; background:#6FC9C9;"></div>
   <div class="cell f12 text" style="left:0px; top:24px;">木 <span class="k">870</span></div>
   <div class="cell f12 text" style="left:49px; top:24px;">毛 <span class="k">640</span></div>
   <div class="cell f12 text" style="left:99px; top:24px;">鳞 <span class="k">210</span></div>
@@ -389,13 +428,13 @@
   <div class="hint" style="top:238px;">游牧商人:以毛皮/鳞/牙易货</div>
 </div>
 </div></div>
-<div class="spec">4 货币格@24 | 8 货品行@46+21i + 返回@215 | 罗盘限 1(已购灰显) | 无贸易站时 8 行灰显"需贸易站" | 提示@238</div>
+<div class="spec">T2:规则线 y42 h2 | M6:货品 +能量元件(10鳞10牙)/异星合金(1500毛750鳞300牙) | 罗盘限 1 | 无贸易站 8 行灰显</div>
 </div>
 
 <div class="item">
-<div class="label">⑩ 地点内部 · 废镇(3×3 房间格,中心=地点色)</div>
+<div class="label">⑩ 地点内部 · 废镇(T2 动态地形色)</div>
 <div class="scr"><div class="panel"><div class="content">
-  <div class="txtblk f12 gold bold" style="left:0px; top:0px; width:100px;">废镇</div>
+  <div class="txtblk f12 bold" style="left:0px; top:0px; width:100px; color:#F29E9E;">废镇</div>
   <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">41%</div>
   <div class="cell f12 text" style="left:0px; top:24px;">水 <span class="k">12</span></div>
   <div class="cell f12 text" style="left:49px; top:24px;">食 <span class="k">8</span></div>
@@ -412,32 +451,36 @@
   <div class="hint" style="top:200px;">废镇:学校与医院,或街头伏击</div>
 </div>
 </div></div>
-<div class="spec">4 格@24(火把=洞穴钥匙) | 房间 3×3 82×82@(58,44):中心=地点色(#F29E9E)其余 PANEL | 搜索@150/离开@174 | 提示@200=地点梗概</div>
+<div class="spec">T2:标题/房间中心格=地点动态 accent(与地图/图例同源) | 四型地点:老屋木/洞穴蓝/废镇粉/城市紫</div>
 </div>
 
 <div class="item">
-<div class="label">⑪ 设置(7 行 pitch28)</div>
+<div class="label">⑪ 设置(9 行;T5 分隔线+危险红)</div>
 <div class="scr"><div class="panel"><div class="content">
-  <div class="txtblk f12 gold bold" style="left:0px; top:0px; width:100px;">设置</div>
+  <div class="txtblk f12 a-dim bold" style="left:0px; top:0px; width:100px;">设置</div>
   <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">87%</div>
   <div class="tab" style="left:0px; top:24px;">小屋</div>
-  <div class="tab" style="left:50px; top:24px;">村庄</div>
-  <div class="tab" style="left:100px; top:24px;">荒野</div>
-  <div class="tab on" style="left:150px; top:24px;">≡</div>
+  <div class="tab" style="left:40px; top:24px;">村庄</div>
+  <div class="tab" style="left:80px; top:24px;">荒野</div>
+  <div class="tab" style="left:120px; top:24px;">星舰</div>
+  <div class="tab on" style="left:160px; top:24px;">≡</div>
   <div class="row focus" style="left:0px; top:52px;"><div class="mark">></div><div class="t">操作说明</div><div class="v">键位:三键</div></div>
-  <div class="row" style="left:0px; top:80px;"><div class="mark"></div><div class="t">重开本局</div><div class="v">需确认</div></div>
-  <div class="row" style="left:0px; top:108px;"><div class="mark"></div><div class="t">关于</div><div class="v">v0.6</div></div>
-  <div class="row" style="left:0px; top:136px;"><div class="mark"></div><div class="t lock">世界种子</div><div class="v">81234567</div></div>
-  <div class="row" style="left:0px; top:164px;"><div class="mark"></div><div class="t lock">存档</div><div class="v">自动·1分钟</div></div>
-  <div class="row" style="left:0px; top:192px;"><div class="mark"></div><div class="t">熄屏</div><div class="v">关</div></div>
-  <div class="row" style="left:0px; top:220px;"><div class="mark"></div><div class="t">返回</div><div class="v"></div></div>
+  <div class="sep" style="left:0px; top:75px; width:198px;"></div>
+  <div class="row" style="left:0px; top:77px;"><div class="mark"></div><div class="t log-foe">重开本局</div><div class="v">需确认</div></div>
+  <div class="row" style="left:0px; top:102px;"><div class="mark"></div><div class="t">关于</div><div class="v">v0.7·第1周目</div></div>
+  <div class="row" style="left:0px; top:127px;"><div class="mark"></div><div class="t lock">世界种子</div><div class="v">81234567</div></div>
+  <div class="row" style="left:0px; top:152px;"><div class="mark"></div><div class="t lock">存档</div><div class="v">自动·1分钟</div></div>
+  <div class="row" style="left:0px; top:177px;"><div class="mark"></div><div class="t">存档码</div><div class="v">拍照保档</div></div>
+  <div class="row" style="left:0px; top:202px;"><div class="mark"></div><div class="t">熄屏</div><div class="v">关</div></div>
+  <div class="row" style="left:0px; top:227px;"><div class="mark"></div><div class="t">睡眠</div><div class="v">关</div></div>
+  <div class="row" style="left:0px; top:252px;"><div class="mark"></div><div class="t">返回</div><div class="v"></div></div>
 </div>
 </div></div>
-<div class="spec">行@52+28i(尾行220) | 世界种子/存档 只读灰显(存档同图复现) | 熄屏档位:关/30秒/1分/2分/5分 | 重开 → 确认页⑫ | 长按下=手动熄屏</div>
+<div class="spec">9 行@52+25i | T5:分隔线 y75+重开红字(焦点反色时墨字) | 存档码:短按导出/长按导入 | 睡眠=L2浅睡/L3深睡四档 | 电池≤20% 红字+背光减半,≤10% 深睡 | 长按≡区双击下=熄屏(I38)</div>
 </div>
 
 <div class="item">
-<div class="label">⑫ 确认页(水平居中,垂直 60)</div>
+<div class="label">⑫ 确认页(选项描边+反色)</div>
 <div class="scr">
 <div class="veil"></div>
 <div class="dpanel" style="top:60px; width:196px; height:200px;">
@@ -445,56 +488,127 @@
   <div class="txtf f12 text" style="left:0px; top:42px; width:176px; height:40px;">
     确定重开本局?当前进度将丢失。
   </div>
-  <div class="act focus" style="left:0px; top:130px;">
-    <div class="txt f12 text">确认执行</div>
+  <div class="act dact focus" style="left:0px; top:130px;">
+    <div class="txt f12">确认执行</div>
   </div>
-  <div class="act" style="left:0px; top:154px;">
+  <div class="act dact" style="left:0px; top:154px;">
     <div class="txt f12 text">取消</div>
   </div>
 </div></div>
-<div class="spec">全部卖出/重开共用 | 弹窗196×200@(22,60) 居中 | f24 标题(10 字冻结闭集) | 正文 f12 176×40@42 | 确定/取消@130/154 回原页</div>
+<div class="spec">T5:非焦点选项灰描边,焦点反色去边 | f24 标题 13 字冻结闭集 | 升空前确认变体:离开/升空/再待会儿</div>
 </div>
 
 <div class="item">
-<div class="label">⑬ 事件总表(M6 进度对照)</div>
+<div class="label">⑬ 升空叙事页(M5;金标题豁免)</div>
 <div class="scr"><div class="panel"><div class="content">
-  <div class="txtblk f12 gold bold" style="left:0px; top:0px; width:100px;">事件</div>
-  <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">87%</div>
-  <div class="txtf f12 text" style="left:0px; top:28px; width:198px; height:240px;">
-    <span class="gold">已灌装(M6 切片一·12 条 36 表项):</span><br>
-    墙外动静 库房异响 疫病 瘟疫<br>
-    野兽袭击 失火 毁陷阱 乞讨者<br>
-    阴险工匠 流浪者·木 流浪者·毛 病人<br>
-    <br>
-    <span class="gold">切片二待做:</span><br>
-    <span class="dim">游牧商人(常驻商店) 斥候/宗师(Perk)<br>
-    窃贼(偷木链) 军队突袭(cityCleared)</span>
+  <div class="txtblk f12 gold bold" style="left:0px; top:0px; width:100px;">升空</div>
+  <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">41%</div>
+  <div class="cell f12 text" style="left:0px; top:24px;">壳 <span class="k">2</span></div>
+  <div class="cell f12 text" style="left:49px; top:24px;">推 <span class="k">1</span></div>
+  <div class="txtf f12 text" style="left:0px; top:48px; width:198px; height:170px;">
+    点火。引擎的轰鸣震得舱壁发颤,尘土从舱身上簌簌落下。
+  </div>
+  <div class="act focus" style="left:0px; top:236px;">
+    <div class="txt f12">继续</div>
   </div>
 </div>
 </div></div>
-<div class="spec">开发对照清单,非游戏内界面 | 轮询挂 HOME+VILLAGE,原版 3~6 分钟全局节拍门</div>
+<div class="spec">8 段固定叙事+磨难段(推 N→段 N,每段船壳-1,壳 0=坠毁回星舰) | 每段单"继续"动作 | 金标题豁免 accent(仪式页)</div>
 </div>
 
 <div class="item">
-<div class="label">⑭ 就地结果提示条 · toast 态(以整备页为例)</div>
+<div class="label">⑭ 结局页(M5;周目继承)</div>
 <div class="scr"><div class="panel"><div class="content">
-  <div class="txtblk f12 gold bold" style="left:0px; top:0px; width:100px;">荒野</div>
+  <div class="txtblk f12 gold bold" style="left:0px; top:0px; width:100px;">结局</div>
   <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">41%</div>
-  <div class="cell f12 text" style="left:0px; top:24px;">水 <span class="k">90</span></div>
-  <div class="cell f12 text" style="left:49px; top:24px;">袋<span class="k">8.2</span></div>
-  <div class="cell f12 text" style="left:99px; top:24px;">HP<span class="k">45</span></div>
-  <div class="cell f12 text" style="left:148px; top:24px;">承<span class="k">110</span></div>
-  <div class="row" style="left:0px; top:52px;"><div class="mark"></div><div class="t">干肉</div><div class="v">库9999 带10</div></div>
-  <div class="row" style="left:0px; top:78px;"><div class="mark"></div><div class="t">药</div><div class="v">库30 带0</div></div>
-  <div class="row" style="left:0px; top:104px;"><div class="mark"></div><div class="t">子弹</div><div class="v">库60 带0</div></div>
-  <div class="row" style="left:0px; top:130px;"><div class="mark"></div><div class="t lock">武器</div><div class="v">铁剑</div></div>
-  <div class="row" style="left:0px; top:156px;"><div class="mark"></div><div class="t lock">护甲</div><div class="v">铁甲 HP45</div></div>
-  <div class="row focus" style="left:0px; top:182px;"><div class="mark">></div><div class="t lock">出发远征</div><div class="v">32s</div></div>
-  <div class="row" style="left:0px; top:208px;"><div class="mark"></div><div class="t">返回</div><div class="v"></div></div>
-  <div class="hint toast" style="top:238px;">还需要等等</div>
+  <div class="txtf f12 text" style="left:0px; top:48px; width:198px; height:170px;">
+    飞船掠过碎片云,巨大的世界在舷窗外静静铺开。它从未有人见过如此完整的大地,你在漫长的星光里替它记下了坐标。——你离开了这颗星球。
+  </div>
+  <div class="act focus" style="left:0px; top:212px;">
+    <div class="txt f12">继续游玩</div>
+  </div>
+  <div class="act" style="left:0px; top:236px;">
+    <div class="txt f12 text">开新周目</div>
+  </div>
 </div>
 </div></div>
-<div class="spec">动作成败闪现当前页提示行(金色,2s 自动还原为该页常态提示) | 覆盖建造/贸易/制造/采集陷阱/派工/整备/事件代价 | 危险类(死亡/战败/断供)为金色,红色化为美化计划 T4 项</div>
+<div class="spec">两选一:继续游玩(留在星舰)/开新周目(周目继承:资源÷1..9 或 ÷(1..10)²,武器护甲 Perk 保留,新图) | 关于行显示第 N 周目</div>
+</div>
+
+<div class="item">
+<div class="label">⑮ 星舰页(M5;T2 星舰紫)</div>
+<div class="scr"><div class="panel"><div class="content">
+  <div class="txtblk f12 a-ship bold" style="left:0px; top:0px; width:100px;">星舰</div>
+  <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">41%</div>
+  <div class="tab" style="left:0px; top:24px;">小屋</div>
+  <div class="tab" style="left:40px; top:24px;">村庄</div>
+  <div class="tab" style="left:80px; top:24px;">荒野</div>
+  <div class="tab on" style="left:120px; top:24px;">星舰</div>
+  <div class="tab" style="left:160px; top:24px;">≡</div>
+  <div class="cell f12 text" style="left:0px; top:48px;">壳 <span class="k">2</span></div>
+  <div class="cell f12 text" style="left:49px; top:48px;">推 <span class="k">1</span></div>
+  <div class="cell f12 text" style="left:99px; top:48px;">金 <span class="k">3</span></div>
+  <div class="cell f12 text" style="left:148px; top:48px;">能 <span class="k">0</span></div>
+  <div class="row focus" style="left:0px; top:96px;"><div class="mark">></div><div class="t">加固船壳</div><div class="v">船壳2→3</div></div>
+  <div class="row" style="left:0px; top:120px;"><div class="mark"></div><div class="t">升级引擎</div><div class="v">推进1→2</div></div>
+  <div class="row" style="left:0px; top:144px;"><div class="mark"></div><div class="t">制造…</div><div class="v">制造台</div></div>
+  <div class="row" style="left:0px; top:168px;"><div class="mark"></div><div class="t lock">升空</div><div class="v">需船壳</div></div>
+  <div class="row" style="left:0px; top:192px;"><div class="mark"></div><div class="t">返回</div><div class="v"></div></div>
+  <div class="hint" style="top:236px;">推进1 磨难段1(段均船壳-1)</div>
+</div>
+</div></div>
+<div class="spec">页签第 4 枚=星舰(踏访星舰格解锁) | 行@96+24i:加固/升级(各 1 合金)/制造…/升空(不可/冷却灰显可聚焦)/返回 | 磨难段提示@236</div>
+</div>
+
+<div class="item">
+<div class="label">⑯ 制造台(M5;执行者四件)</div>
+<div class="scr"><div class="panel"><div class="content">
+  <div class="txtblk f12 a-craft bold" style="left:0px; top:0px; width:100px;">制造台</div>
+  <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">41%</div>
+  <div class="cell f12 text" style="left:0px; top:24px;">木 <span class="k">35</span></div>
+  <div class="cell f12 text" style="left:49px; top:24px;">能 <span class="k">0</span></div>
+  <div class="cell f12 text" style="left:99px; top:24px;">鳞 <span class="k">12</span></div>
+  <div class="cell f12 text" style="left:148px; top:24px;">牙 <span class="k">8</span></div>
+  <div class="row focus" style="left:0px; top:52px;"><div class="mark">></div><div class="t">刺刀</div><div class="v">缺35木1铁</div></div>
+  <div class="row" style="left:0px; top:75px;"><div class="mark"></div><div class="t lock">激光步枪</div><div class="v">缺35木1能</div></div>
+  <div class="row" style="left:0px; top:98px;"><div class="mark"></div><div class="t lock">手雷</div><div class="v">缺100木50牙</div></div>
+  <div class="row" style="left:0px; top:121px;"><div class="mark"></div><div class="t lock">流星锤</div><div class="v">缺10牙</div></div>
+  <div class="row" style="left:0px; top:144px;"><div class="mark"></div><div class="t">返回</div><div class="v"></div></div>
+  <div class="hint" style="top:238px;">武器取最优/锤可重复造</div>
+</div>
+</div></div>
+<div class="spec">执行者(合金和解或士兵战)解锁 | 四件:刺刀/激光步枪(lv5/6 耗元件)/手雷(15 伤害)/流星锤(眩晕 2 回合) | 缺口就地显示</div>
+</div>
+
+<div class="item">
+<div class="label">⑰ 存档码导出(M7;拍码翻页)</div>
+<div class="scr"><div class="panel"><div class="content">
+  <div class="txtblk f12 a-dim bold" style="left:0px; top:0px; width:100px;">存档码</div>
+  <div class="txtblk f12 gold ctr" style="left:0px; top:30px; width:198px;">第1/4页</div>
+  <div class="txtblk f12 text" style="left:8px; top:120px; width:30px; text-align:center;">I</div>
+  <div class="txtblk f12 text" style="left:40px; top:120px; width:30px; text-align:center;">R</div>
+  <div class="txtblk f12 text" style="left:72px; top:120px; width:30px; text-align:center;">F</div>
+  <div class="txtblk f12 text" style="left:104px; top:120px; width:30px; text-align:center;">Q</div>
+  <div class="txtblk f12 text" style="left:136px; top:120px; width:30px; text-align:center;">M</div>
+  <div class="txtblk f12 text" style="left:168px; top:120px; width:30px; text-align:center;">B</div>
+  <div class="hint" style="top:256px;">拍照后按确定翻页</div>
+</div>
+</div></div>
+<div class="spec">核心档 173B→RLE→base32,CRC8 帧校验 | 6 字符/页 32px 步进(拍照可辨) | 无焦点:确定=下一页,尾页=返回,长按=回第 1 页</div>
+</div>
+
+<div class="item">
+<div class="label">⑱ 导入存档码(M7;逐字符)</div>
+<div class="scr"><div class="panel"><div class="content">
+  <div class="txtblk f12 a-dim bold" style="left:0px; top:0px; width:110px;">导入存档码</div>
+  <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">87%</div>
+  <div class="txtblk f12 text" style="left:8px; top:70px; width:190px;">IRFQMB</div>
+  <div class="txtblk f12 gold" style="left:8px; top:92px; width:190px;">A2T7XZ</div>
+  <div class="txtblk f12 dim" style="left:8px; top:114px; width:190px;">MQ___</div>
+  <div class="hint" style="top:256px;">上/下换字 确定=下一位 长按=退格</div>
+</div>
+</div></div>
+<div class="spec">3 行回看窗(当前行金字,光标位实时预览草稿) | base32 A-Z2-7 | 校验失败:确定=重来 长按=退出;双击下键随时退出 | 导入成功=整档恢复</div>
 </div>
 
 </body>

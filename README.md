@@ -4,7 +4,7 @@ FoloToy AI Passport(ESP32-C3,240×320 圆屏,三键)上的菜单式文字放置�
 参考 [A Dark Room](https://github.com/doublespeakgames/adarkroom) 重制:生火、
 收集、建造、招募、交易,然后走向荒野——全部逻辑本地运行,**合盖离线也在推进**。
 
-![主页](docs/screenshots/02_home.png)
+![封面](docs/cover.png)
 
 ## 玩法(忠实原版口径,数值见 docs/DESIGN.zh_CN.md §9 源码取证)
 
@@ -29,8 +29,12 @@ FoloToy AI Passport(ESP32-C3,240×320 圆屏,三键)上的菜单式文字放置�
 | 村庄(收入总览) | 荒野地图(全量图例+纹样) | 潮湿洞穴 |
 | ![战斗](docs/screenshots/07_combat.png) | ![贸易](docs/screenshots/08_trade.png) | ![设置](docs/screenshots/09_settings.png) |
 | 战斗 | 贸易 | 设置 |
-| ![事件](docs/screenshots/10_event.png) | ![确认](docs/screenshots/11_confirm.png) | |
-| 事件弹窗 | 确认弹窗 | |
+| ![事件](docs/screenshots/10_event.png) | ![确认](docs/screenshots/11_confirm.png) | ![星舰](docs/screenshots/12_ship.png) |
+| 事件弹窗 | 确认弹窗 | 星舰(第四幕) |
+| ![制造台](docs/screenshots/13_fab.png) | ![升空](docs/screenshots/14_liftoff.png) | ![结局](docs/screenshots/15_ending.png) |
+| 制造台 | 升空叙事 | 结局/周目 |
+| ![存档码](docs/screenshots/16_export.png) | ![导入](docs/screenshots/17_import.png) | ![整备](docs/screenshots/18_prep.png) |
+| 存档码导出 | 存档码导入 | 荒野整备 |
 
 ## 操作(上 / 下 / 确定三键)
 
