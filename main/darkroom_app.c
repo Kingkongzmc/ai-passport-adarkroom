@@ -1058,7 +1058,7 @@ static void render_village(void) {
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(s_hint, 0, 264);   // 返回行(236)之下,不再遮挡
     if (adj) {
-        lv_label_set_text(s_hint, "上加 下减(长按=5) 确定=完成");
+        lv_label_set_text(s_hint, "上加 下减(可长按连发) 确定=完成");
     } else if (s.focus >= 3 && s.focus <= 7 &&
                village_row_job(s.focus) >= 0 &&
                dr_rules_job_unlocked(&s.game,
@@ -1258,7 +1258,7 @@ static void render_map(void) {
         lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_pos(s_hint, 0, 256);
         if (adj)
-            lv_label_set_text(s_hint, "上下调整(长按=±5) 确定完成");
+            lv_label_set_text(s_hint, "上下调整(可长按连发) 确定完成");
         else if (s.game.food == 0)
             lv_label_set_text(s_hint, "整备干肉后才能出发(库→带)");
         else
@@ -2957,6 +2957,11 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
             s.dirty = true;
             return;
         }
+        // 光标长按连发(I37):常规列表/弹窗按住上/下逐行连走,免逐下按
+        // (调节态的数量连发已在上面两个分支处理;节流同 100ms)
+        if (btn == BSP_BTN_UP) focus_move(-1);
+        else focus_move(1);
+        s.dirty = true;
         return;
     }
 
