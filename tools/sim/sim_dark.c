@@ -245,6 +245,10 @@ int main(int argc, char **argv) {
     }
     // SIM_OUTFIT=1:整备页直达(未远征态),整备调节按键实测(I36)
     if (getenv("SIM_OUTFIT")) dr_debug_set_outfit();
+    // SIM_TYPE_CODE=<存档码>:导入页逐字符注入(百字符码超按键脚本容量;
+    // 前置脚本需先把页面导到导入页,见 tools/keys.txt M7 段)
+    char *sim_code = getenv("SIM_TYPE_CODE");
+    if (sim_code) dr_debug_type_code(sim_code);
 
     for (int f = 0; f < frames; f++) {
         for (int k = 0; k < s_key_count; k++)
@@ -284,6 +288,7 @@ int main(int argc, char **argv) {
     sim_lvgl_lock(1000);
     dr_debug_dump();
     sim_lvgl_unlock();
-    printf("sim_dark done: %d frames -> %s\n", frames, bmp);
+    printf("sim_dark done: %d frames -> %s backlight=%d\n", frames, bmp,
+           g_sim_backlight);
     return 0;
 }

@@ -6,6 +6,7 @@ idf_component_register(
          "darkroom_app.c"
          "dr_port.c"
          "game_darkroom/dr_rules.c"
+         "game_darkroom/dr_savecode.c"
          "game_darkroom/dr_state.c"
          "game_darkroom/dr_world.c"
          "game_darkroom/dr_events.c"

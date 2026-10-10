@@ -21,6 +21,8 @@ void dr_debug_force_event(uint16_t idx);       // 模拟器:直达事件弹窗(S
 // 模拟器:星舰页注入(SIM_SHIP=exec,hull,thr,alloy)
 void dr_debug_set_ship(uint8_t exec, uint8_t hull, uint8_t thr, uint32_t alloy);
 void dr_debug_set_outfit(void);   // 模拟器:整备页直达(SIM_OUTFIT)
+// 模拟器:导入页逐字符注入(跳过按键路径,测校验/应用链;SIM_TYPE_CODE)
+void dr_debug_type_code(const char *code);
 
 #ifdef __cplusplus
 }

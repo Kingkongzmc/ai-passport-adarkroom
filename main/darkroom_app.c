@@ -30,9 +30,11 @@
 #include "bsp_pins.h"
 #include "dr_events.h"
 #include "dr_port.h"
+#include "dr_savecode.h"
 #include "dr_text.h"
 #include "dr_util.h"
 #include "dr_world.h"
+#include "esp_sleep.h"
 #include "lvgl.h"
 
 #include "esp_log.h"
@@ -82,6 +84,7 @@ typedef enum {
     PG_TITLE = 0, PG_HOME, PG_BUILD, PG_VILLAGE, PG_MAP,    PG_RUIN, PG_COMBAT, PG_TRADE, PG_SETTINGS,
     PG_EVENT, PG_CONFIRM, PG_CRAFT,
     PG_SHIP, PG_FAB, PG_LIFTOFF, PG_ENDING,   // M5 第四幕
+    PG_EXPORT, PG_IMPORT,                     // M7 存档码(设置页进出)
 } page_t;
 
 // ---- 状态 ----
@@ -113,6 +116,20 @@ static struct {
     int8_t outfit_adj;         // 出发整备:正在调配的物资(-1=无)
     bool screen_off;           // 熄屏态(背光 0,任意键唤醒并吞键,DESIGN §8.1)
     uint32_t last_input_ms;    // 最近一次真实按键(自动熄屏计时基准)
+    bool bl_dim;               // 电量≤20% 降背光态(唤醒/熄屏统一走 apply_backlight)
+    bool batt_low_toast_done;  // ≤20% 提示只发一次
+    volatile bool sleep_req;   // L2 请求(tick 置位;key_task 打盹循环消费)
+    volatile bool deep_req;    // L3 请求(5min 到点 / 电量≤10%;key_task 执行)
+    // 存档码(M7):导出全码缓存 + 页游标;导入逐字符状态机
+    char code_buf[DR_CODE_MAX_CHARS + 1];
+    int code_len;              // 导出码字符数
+    int code_pages;            // 总页数(6 字/页)
+    int code_page;             // 当前页 0 基
+    char imp_buf[DR_CODE_MAX_CHARS];
+    int imp_pos;               // 已确认字符数(光标位)
+    int imp_total;             // 预期总字符(0=帧头未解出)
+    int imp_draft;             // 光标位草稿在 base32 表中的下标
+    bool imp_failed;           // 校验失败态(确定=清空重来,长按=退出)
     char toast[40];            // 就地结果提示(覆盖当前页提示行,到期还原)
     uint32_t toast_until_ms;
     dr_game_t game;
@@ -158,6 +175,12 @@ static lv_obj_t *s_legchip[LEG_KINDS], *s_legtxt[LEG_KINDS];
 #define ROOM_CELLS 9
 static lv_obj_t *s_room[ROOM_CELLS];
 static lv_obj_t *s_hp[2], *s_hpfill[2];
+
+// 存档码页(M7):导出 6 字符大间隔 + 页码行;导入 3 行回看(每行 6 字符)
+#define CODE_COLS 6
+static lv_obj_t *s_code_hdr;               // "第 n/N 页"
+static lv_obj_t *s_code_char[CODE_COLS];   // 导出当前页字符(间隔 32px 拍照可辨)
+static lv_obj_t *s_imp_lines[3];           // 导入回看行(最近 3 行 × 6 字符)
 
 static lv_timer_t *s_timer;
 static QueueHandle_t s_key_queue;
@@ -520,6 +543,27 @@ static void build_ui(void) {
                         0, 48, 198, 170);
     lv_obj_add_flag(s_story, LV_OBJ_FLAG_HIDDEN);
 
+    // 存档码页(M7):页码行 + 6 字符大间隔;导入 3 行回看。常驻对象 10 枚
+    // f12 label(~1.5KB LVGL 池,内存红线内的克制增量)。
+    s_code_hdr = label_new(s_content, &dr_font_12, lv_color_hex(COL_GOLD),
+                           0, 30, 198, 15);
+    lv_obj_set_style_text_align(s_code_hdr, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_add_flag(s_code_hdr, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < CODE_COLS; i++) {
+        s_code_char[i] = label_new(s_content, &dr_font_12,
+                                   lv_color_hex(COL_TEXT), 8 + i * 32, 120,
+                                   30, 15);
+        lv_obj_set_style_text_align(s_code_char[i], LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_add_flag(s_code_char[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    for (int i = 0; i < 3; i++) {
+        s_imp_lines[i] = label_new(s_content, &dr_font_12,
+                                   lv_color_hex(COL_TEXT), 0, 70 + i * 22,
+                                   198, 15);
+        lv_obj_set_style_text_align(s_imp_lines[i], LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_add_flag(s_imp_lines[i], LV_OBJ_FLAG_HIDDEN);
+    }
+
     // 标题页三件套(独立对象;组块中心 ~139 垂直居中)
     s_t_big = label_new(s_content, &dr_font_24, lv_color_hex(COL_GOLD), 0, 88, 200, 30);
     lv_obj_set_style_text_align(s_t_big, LV_TEXT_ALIGN_CENTER, 0);
@@ -787,6 +831,11 @@ static void clear_scene(void) {
     }
     for (int i = 0; i < ROOM_CELLS; i++) lv_obj_add_flag(s_room[i], LV_OBJ_FLAG_HIDDEN);
     for (int i = 0; i < 2; i++) lv_obj_add_flag(s_hp[i], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_code_hdr, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < CODE_COLS; i++)
+        lv_obj_add_flag(s_code_char[i], LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < 3; i++)
+        lv_obj_add_flag(s_imp_lines[i], LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_veil, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dpanel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dtitle, LV_OBJ_FLAG_HIDDEN);
@@ -795,25 +844,46 @@ static void clear_scene(void) {
 }
 
 // ===================================================================
-// 熄屏(DESIGN §8.1 L1 的设备形态:背光全灭,游戏照常运行/存档)
+// 电源(DESIGN §8.1/§8.2):L1 熄屏 + L2 浅睡 + L3 深睡 + 电量保护
 // ===================================================================
-// 档位 0..4:关/30秒/1分/2分/5分;存档 _rsv[1](0=关,老档零迁移)。
-// 手动:任意页长按下键(村庄调节内长按上下=±5 优先);唤醒:任意键,唤醒键被
-// 吞掉不触发游戏动作;战斗/事件/确认弹屏中挂起自动计时(§8.1),手动不受限。
+// L1 档位 0..4:关/30秒/1分/2分/5分。_rsv[1] 位打包:低 3 位 = L1 档
+// (老档 0..4 零迁移),位 3..5 = L2/L3 睡眠模式(0=关 1=浅睡 2=深睡
+// 3=浅+深;老档高位为零=关,同样零迁移)。
+// L2 打盹:三键是 ADC 分压(共用 GPIO0),浅睡中 ADC 无法采样、GPIO 唤醒
+// 不可用 —— 用 1s RTC 定时器打盹循环替代(醒来查队列/ADC,有键即退;
+// 省电近似浅睡底电流)。L3 深睡:松开态引脚上拉 3300mV、按下最高 595mV
+// (< 数字低电平),GPIO0 低电平唤醒三键全可用;唤醒=重启走离线结算。
+// 手动:双击下键熄屏(L1);唤醒键一律吞掉(防误触)。战斗/事件/确认
+// 弹屏挂起自动计时(§8.1);电量≤10% 硬保护不受挂起限制(§8.2)。
 #define DR_BL_ON 100
+#define DR_BL_DIM 50                 // 电量≤20% 背光减半(§8.2)
+#define DR_LIGHT_SLEEP_S 60u         // L2 门槛(可配)
+#define DR_DEEP_SLEEP_S 300u         // L3 门槛(可配)
+#define DR_BATT_LOW_PCT 20           // ≤20% 降背光+提示
+#define DR_BATT_CRIT_PCT 10          // ≤10% 存档+立即深睡
+#define DR_BTN_GPIO 0                // 三键分压节点 = GPIO0(bsp_pins.h ADC1_CH0)
 static const uint16_t k_scr_off_s[5] = { 0, 30, 60, 120, 300 };
 static const char *const k_scr_off_lbl[5] = { "关", "30秒", "1分", "2分", "5分" };
+static const char *const k_sleep_lbl[4] = { "关", "浅睡", "深睡", "浅睡+深睡" };
 static uint8_t scr_off_level(void) {
-    uint8_t v = s.game._rsv[1];
+    uint8_t v = s.game._rsv[1] & 0x07u;
     return (v > 4) ? 4 : v;
+}
+static uint8_t sleep_mode(void) {
+    return (s.game._rsv[1] >> 3) & 0x07u;
+}
+// 背光唯一写入口:熄屏/低电降档统一折算(电量为 0 时 LEDC 直接熄)
+static void apply_backlight(void) {
+    if (s.screen_off) { bsp_display_backlight(0); return; }
+    bsp_display_backlight(s.bl_dim ? DR_BL_DIM : DR_BL_ON);
 }
 static void screen_off_now(void) {
     s.screen_off = true;
-    bsp_display_backlight(0);
+    apply_backlight();
 }
 static void screen_wake(void) {
     s.screen_off = false;
-    bsp_display_backlight(DR_BL_ON);
+    apply_backlight();
 }
 
 // ===================================================================
@@ -1486,19 +1556,83 @@ static void render_trade(void) {
 static void render_settings(void) {
     render_topbar("设置");
     render_tabs(4, forest_open(), nav_tab_enabled(2), -1);
+    // 9 行,步 25(52 起,尾行 252+22=274 收进内容区 278)
     set_row(0, 52, "操作说明", "键位:三键", s.focus == 0, false);
-    set_row(1, 80, "重开本局", "需确认", s.focus == 1, false);
+    set_row(1, 77, "重开本局", "需确认", s.focus == 1, false);
     char about[28];   // 关于行:版本 + 周目(M5 周目继承;缓冲按 %u 满宽留量)
     snprintf(about, sizeof(about), "v0.7·第%u周目",
              (unsigned)(s.game.prestige_count + 1u));
-    set_row(2, 108, "关于", about, s.focus == 2, false);
+    set_row(2, 102, "关于", about, s.focus == 2, false);
     char seed[12];
     snprintf(seed, sizeof(seed), "%u", (unsigned)s.game.map_seed);
-    set_row(3, 136, "世界种子", seed, s.focus == 3, true);   // 只读:存档同图复现
-    set_row(4, 164, "存档", "自动·1分钟", false, true);    // 只读:落盘节奏说明
-    set_row(5, 192, "熄屏", k_scr_off_lbl[scr_off_level()],
-            s.focus == 5, false);                          // 长按下键随时手动熄屏
-    set_row(6, 220, "返回", "", s.focus == 6, false);
+    set_row(3, 127, "世界种子", seed, s.focus == 3, true);   // 只读:存档同图复现
+    set_row(4, 152, "存档", "自动·1分钟", false, true);    // 只读:落盘节奏说明
+    set_row(5, 177, "存档码", "拍照保档", s.focus == 5, false);
+    set_row(6, 202, "熄屏", k_scr_off_lbl[scr_off_level()],
+            s.focus == 6, false);                          // 长按下键随时手动熄屏
+    set_row(7, 227, "睡眠", k_sleep_lbl[sleep_mode()],
+            s.focus == 7, false);                          // L2/L3 档位(§8.1)
+    set_row(8, 252, "返回", "", s.focus == 8, false);
+}
+
+// ---- 存档码导出页(拍板:6 字/页,上/下翻页,确定=下一页,尾页确定=返回,
+// 长按确定=回第 1 页,顶部"第 n/N 页",页脚"拍照后按确定翻页") ----
+static void render_export(void) {
+    render_topbar("存档码");
+    char hdr[24];
+    snprintf(hdr, sizeof(hdr), "第%d/%d页", s.code_page + 1, s.code_pages);
+    lv_label_set_text(s_code_hdr, hdr);
+    lv_obj_clear_flag(s_code_hdr, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < CODE_COLS; i++) {
+        int idx = s.code_page * CODE_COLS + i;
+        char c[2] = { 0, 0 };
+        c[0] = (idx < s.code_len) ? s.code_buf[idx] : ' ';
+        lv_label_set_text(s_code_char[i], c);
+        lv_obj_clear_flag(s_code_char[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(s_hint, 0, 256);
+    lv_label_set_text(s_hint, "拍照后按确定翻页");
+}
+
+// ---- 存档码导入页(拍板:逐字符输入;已输字符 6 字/行回看 3 行;
+// 输满自动校验,失败"确定=清空重来/长按=退出";双击下键随时退出) ----
+static void render_import(void) {
+    render_topbar("导入存档码");
+    int cur_row = s.imp_pos / CODE_COLS;
+    int start = (cur_row >= 3) ? cur_row - 2 : 0;
+    for (int li = 0; li < 3; li++) {
+        int row = start + li;
+        if (row * CODE_COLS > s.imp_pos) {   // 该行无内容(含空尾行)
+            lv_obj_add_flag(s_imp_lines[li], LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        char line[CODE_COLS + 1];
+        for (int c = 0; c < CODE_COLS; c++) {
+            int idx = row * CODE_COLS + c;
+            if (idx < s.imp_pos) line[c] = s.imp_buf[idx];
+            else if (idx == s.imp_pos && !s.imp_failed)
+                line[c] = DR_CODE_B32[s.imp_draft];   // 光标位实时预览草稿
+            else
+                line[c] = '_';
+        }
+        line[CODE_COLS] = '\0';
+        lv_label_set_text(s_imp_lines[li], line);
+        lv_obj_set_style_text_color(s_imp_lines[li],
+            lv_color_hex(row == cur_row && !s.imp_failed ? COL_GOLD : COL_DIM), 0);
+        lv_obj_clear_flag(s_imp_lines[li], LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(s_hint, 0, 256);
+    if (s.imp_failed)
+        lv_label_set_text(s_hint, "校验失败 确定=重来 长按=退出");
+    else if (s.imp_total > 0) {
+        char h[64];   // int 全范围最坏 58B(-Werror=format-truncation 实测)
+        snprintf(h, sizeof(h), "上/下换字 确定=下一位 第%d/%d页",
+                 cur_row + 1, (s.imp_total + CODE_COLS - 1) / CODE_COLS);
+        lv_label_set_text(s_hint, h);
+    } else
+        lv_label_set_text(s_hint, "上/下换字 确定=下一位 长按=退格");
 }
 
 // 事件选项标签:文案 + 代价后缀(如"给毛·50毛");数字统一由后缀显示
@@ -1905,6 +2039,8 @@ static void render(void) {
         case PG_FAB:     render_fab(); break;
         case PG_LIFTOFF: render_liftoff(); break;
         case PG_ENDING:  render_ending(); break;
+        case PG_EXPORT:  render_export(); break;
+        case PG_IMPORT:  render_import(); break;
     }
     // 就地提示:渲染末覆盖提示行(仅对当前显示提示行的页面生效;
     // 到期由 tick 清除并触发整页重画,恢复各页自己的提示文案与暗色)
@@ -1934,7 +2070,7 @@ static int page_lines(void) {
             return 4 + (dr_world_carry_grenades(&s_world) > 0 ? 1 : 0) +
                        (dr_world_carry_bolas(&s_world) > 0 ? 1 : 0);
         case PG_TRADE: return 11;   // 10 档货(M5 +元件/合金)+ 返回
-        case PG_SETTINGS: return 7;   // 说明/重开/关于/种子/存档/熄屏/返回
+        case PG_SETTINGS: return 9;   // 说明/重开/关于/种子/存档/存档码/熄屏/睡眠/返回
         case PG_EVENT: {
             uint16_t c = 0;
             const dr_event_t *ev = dr_events_table(&c);
@@ -2115,6 +2251,25 @@ static void page_goto(page_t p) {
     // 上次走的方向(原一律重置 0=东:往西走被场景打断后按确定反向东走)
     if (p == PG_MAP && s.game.in_wilderness && s.last_dir >= 0)
         s.focus = s.last_dir;
+    if (p == PG_EXPORT) {   // 进页生成整码一次(码在挂机中会过时,按页重进即刷新)
+        s.code_len = (int)dr_savecode_export(&s.game, s.code_buf,
+                                             sizeof(s.code_buf));
+        if (s.code_len <= 0) s.code_len = 0;
+        s.code_pages = (s.code_len + 5) / 6;
+        if (s.code_pages < 1) s.code_pages = 1;
+        s.code_page = 0;
+        // 全码进串口日志:拍照抄码之外的第二条抄码路径(模拟器 round-trip
+        // 回归也靠它)
+        if (s.code_len > 0)
+            ESP_LOGI(TAG, "存档码(%d字/ %d页):%s", s.code_len, s.code_pages,
+                     s.code_buf);
+    }
+    if (p == PG_IMPORT) {   // 逐字符状态机复位
+        s.imp_pos = 0;
+        s.imp_total = 0;
+        s.imp_draft = 0;
+        s.imp_failed = false;
+    }
     if (!row_enabled(0)) focus_move(1);   // 首行禁用则落到首个可用行
     s.dirty = true;
 }
@@ -2556,7 +2711,7 @@ static void list_action(int idx) {
             break;
         }
         case PG_SETTINGS:
-            if (idx == 6) page_goto(PG_HOME);
+            if (idx == 8) page_goto(PG_HOME);
             else if (idx == 0) log_push("上下/确定/长按返回/双击下熄屏");
             else if (idx == 1) {                       // 重开本局:需确认
                 s.confirm_from = 0;
@@ -2564,11 +2719,18 @@ static void list_action(int idx) {
             }
             else if (idx == 3) log_push("种子决定地图与随机序列");
             else if (idx == 4) log_push("每分钟或按键后自动落盘");
-            else if (idx == 5) {                       // 熄屏档位循环
+            else if (idx == 5) page_goto(PG_EXPORT);   // 存档码:短按=导出(长按=导入,见 LONG 分支)
+            else if (idx == 6) {                       // 熄屏档位循环(L1)
                 uint8_t lv = (uint8_t)((scr_off_level() + 1) % 5);
-                s.game._rsv[1] = lv;
+                s.game._rsv[1] = (uint8_t)((s.game._rsv[1] & ~0x07u) | lv);
                 s.save_pending = true;
                 log_push(lv ? "熄屏已开,双击下键手动熄屏" : "熄屏已关");
+            }
+            else if (idx == 7) {                       // 睡眠模式循环(L2/L3)
+                uint8_t m = (uint8_t)((sleep_mode() + 1) % 4);
+                s.game._rsv[1] = (uint8_t)((s.game._rsv[1] & 0x07u) | (m << 3));
+                s.save_pending = true;
+                log_push(m ? "睡眠已开:无操作自动休眠" : "睡眠已关");
             }
             else {                                     // 关于:版本 + 通关纪录
                 log_push("《小黑屋》A Dark Room 重制 v0.7");
@@ -2589,6 +2751,8 @@ static void handle_ok(void) {
     switch (s.page) {
         case PG_TITLE: page_goto(PG_HOME); break;
         case PG_HOME:  home_action(s.focus); break;
+        case PG_EXPORT:   // 存档码两页按键在 handle_key 直接分发,不经此处
+        case PG_IMPORT:   break;
         case PG_BUILD:
         case PG_VILLAGE:
         case PG_MAP:
@@ -2772,8 +2936,29 @@ static void tick(lv_timer_t *t) {
     if (last_batt_ms == 0 || now_ms - last_batt_ms >= 30000u) {
         last_batt_ms = now_ms;
         int soc = bsp_battery_soc();
-        // 标题页顶栏留白,电量只在游戏页刷新
+        // 标题页顶栏留白,电量只在游戏页刷新(§8.2"常显":含荒野/战斗等全页)
         if (soc >= 0 && s.page != PG_TITLE) lv_label_set_text_fmt(s_batt, "%d%%", soc);
+        // 电量保护(§8.2):≤20% 背光减半+提示一次;≤10% 硬保护——立即存档
+        // +直接 L3 深睡(不受弹屏挂起限制,跳过 L1/L2 计时)。toast 先行,
+        // 1.5s 后由 key_task 执行深睡序列(渲染任务自由跑,提示可见)。
+        if (soc >= 0 && !s.deep_req) {
+            if (soc <= DR_BATT_CRIT_PCT) {
+                toast("即将沉睡");
+                s.deep_req = true;
+            } else if (soc <= DR_BATT_LOW_PCT) {
+                if (!s.bl_dim) {
+                    s.bl_dim = true;
+                    apply_backlight();
+                }
+                if (!s.batt_low_toast_done) {
+                    toast("电量低");
+                    s.batt_low_toast_done = true;
+                }
+            } else if (s.bl_dim) {
+                s.bl_dim = false;               // 电量回升(充电中):还原背光
+                apply_backlight();
+            }
+        }
     }
 
     // 规则心跳:火焰/温度/建造者剧情/收入/流浪者;剧情瞬间写日志
@@ -2859,15 +3044,29 @@ static void tick(lv_timer_t *t) {
         s.prev_gather_ready = g_act;
         s.prev_trap_ready = t_act;
     }
-    // 自动熄屏:档位非关 + 无操作超时;战斗/事件/确认弹屏中挂起计时(§8.1,
-    // 交互中突然黑屏会坑人),手动长按下不受此限
+    // 自动熄屏(L1):档位非关 + 无操作超时;战斗/事件/确认弹屏中挂起计时
+    // (§8.1,交互中突然黑屏会坑人),手动长按下不受此限
+    uint8_t smode = sleep_mode();
+    bool in_dialog = s.page == PG_COMBAT || s.page == PG_EVENT ||
+                     s.page == PG_CONFIRM;
     if (!s.screen_off) {
         uint16_t to_s = k_scr_off_s[scr_off_level()];
-        bool in_dialog = s.page == PG_COMBAT || s.page == PG_EVENT ||
-                         s.page == PG_CONFIRM;
         if (to_s > 0 && !in_dialog &&
             now_ms - s.last_input_ms >= (uint32_t)to_s * 1000u)
             screen_off_now();
+    }
+    // L2 浅睡 / L3 深睡(§8.1):熄屏之后叠加计时,弹屏同样挂起;
+    // 请求由 key_task 消费(打盹循环 / 深睡序列),tick 只置位。
+    if (!in_dialog) {
+        uint32_t idle = now_ms - s.last_input_ms;
+        if (!s.deep_req) {
+            if ((smode & 1u) && idle >= DR_LIGHT_SLEEP_S * 1000u)
+                s.sleep_req = true;    // L2:先熄屏后浅睡(L1 到时已在上面触发)
+            if (smode >= 2u && idle >= DR_DEEP_SLEEP_S * 1000u)
+                s.deep_req = true;     // L3:到点存档+深睡(浅睡打盹中也会被
+        }                              // key_task 用同条件接管)
+    } else {
+        s.sleep_req = false;           // 弹屏中撤回浅睡请求(交互优先)
     }
     // 周期存档:纯挂机时收入产出也落盘(与按键/渲染同在 LVGL
     // 线程,天然与状态变更互斥;NVS 写入约毫秒级,每分钟一次可接受)
@@ -2904,6 +3103,34 @@ static bool nav_tab_enabled(int i) {
     }
 }
 
+// 导入页"确定":确认当前草稿位并前进。输到 8 字符解帧头得总长;输满自动
+// 校验:通过 = 核心档入账(新世界/新事件,离线不结算)+ 存档;失败 = 失败态。
+static void import_confirm_char(void) {
+    if (s.imp_total > 0 && s.imp_pos >= s.imp_total) return;   // 已满,等自动校验
+    s.imp_buf[s.imp_pos++] = DR_CODE_B32[s.imp_draft];
+    s.imp_draft = 0;
+    if (s.imp_total == 0 && s.imp_pos >= 8) {
+        int t = (int)dr_savecode_expect_len(s.imp_buf, (size_t)s.imp_pos);
+        if (t == 0) { s.imp_failed = true; return; }           // 魔数/版本不符
+        s.imp_total = t;
+    }
+    if (s.imp_total > 0 && s.imp_pos >= s.imp_total) {
+        dr_code_core_t core;
+        if (dr_savecode_import(s.imp_buf, (size_t)s.imp_total, &core)) {
+            uint32_t seed = (uint32_t)esp_timer_get_time() ^ 0x5EED;
+            dr_savecode_apply(&core, &s.game, seed, dr_port_now_ts());
+            dr_world_gen(&s_world, s.game.map_seed);   // 码不保地图,新种子新图
+            s_log_cnt = 0;
+            log_push("存档码恢复成功");
+            toast("恢复成功");
+            s.save_pending = true;
+            page_goto(PG_HOME);
+        } else {
+            s.imp_failed = true;   // CRC/解压失败:码有误或不完整
+        }
+    }
+}
+
 static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
     if (btn != BSP_BTN_UP && btn != BSP_BTN_DOWN && btn != BSP_BTN_OK) return;
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
@@ -2914,8 +3141,14 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
         return;
     }
     // 双击下键 = 手动熄屏(I38:原"长按下键熄屏"与 I37 连发滚动抢手势——
-    // 组件 1500ms 先发 LONG(熄屏)后发 HOLD(连发),按住下键滚动必被熄屏打断)
+    // 组件 1500ms 先发 LONG(熄屏)后发 HOLD(连发),按住下键滚动必被熄屏打断)。
+    // 导入页例外:双击下键 = 随时退出导入(拍板"不阻断退出";导入是短时
+    // 操作,手动熄屏在此让位)
     if (btn == BSP_BTN_DOWN && ev == BSP_BTN_DOUBLE) {
+        if (s.page == PG_IMPORT) {
+            page_goto(PG_SETTINGS);
+            return;
+        }
         screen_off_now();
         return;
     }
@@ -2942,6 +3175,7 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
     if (ev == BSP_BTN_HOLD) {
         static uint32_t s_last_hold_ms = 0;
         if (btn == BSP_BTN_OK) return;
+        if (s.page == PG_EXPORT || s.page == PG_IMPORT) return;   // 换字/翻页不连发
         if (now_ms - s_last_hold_ms < 100u) return;
         s_last_hold_ms = now_ms;
         if (s.page == PG_VILLAGE && s.village_adj >= 0) {
@@ -2972,6 +3206,38 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
     }
 
     if (ev == BSP_BTN_PRESS) {
+        // 存档码导出页:上/下翻页,确定=下一页(尾页=返回设置)
+        if (s.page == PG_EXPORT) {
+            if (btn == BSP_BTN_UP) {
+                if (s.code_page > 0) s.code_page--;
+            } else if (btn == BSP_BTN_DOWN) {
+                if (s.code_page + 1 < s.code_pages) s.code_page++;
+            } else {
+                if (s.code_page + 1 < s.code_pages) s.code_page++;
+                else page_goto(PG_SETTINGS);
+            }
+            s.dirty = true;
+            return;
+        }
+        // 存档码导入页:上/下换草稿字符,确定=确认前进;失败态确定=清空重来
+        if (s.page == PG_IMPORT) {
+            if (s.imp_failed) {
+                if (btn == BSP_BTN_OK) {
+                    s.imp_pos = 0;
+                    s.imp_total = 0;
+                    s.imp_draft = 0;
+                    s.imp_failed = false;
+                }
+            } else if (btn == BSP_BTN_UP) {
+                s.imp_draft = (s.imp_draft + 31) % 32;
+            } else if (btn == BSP_BTN_DOWN) {
+                s.imp_draft = (s.imp_draft + 1) % 32;
+            } else if (btn == BSP_BTN_OK) {
+                import_confirm_char();
+            }
+            s.dirty = true;
+            return;
+        }
         // 幽灵键窗已在函数头统一鉴别(I33),这里直接进动作分发
         // 出发整备调配:上/下=±1(长按=±5),确定=完成退出(与村庄人数调节
         // 同款;原"确定切下一项"在 6 携带行下退出要连按 6 下——真机 I36)
@@ -3102,6 +3368,22 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
             handle_ok();
         }
     } else if (ev == BSP_BTN_LONG) {
+        // 存档码两页的长按语义(拍板):导出=回第 1 页;导入=退格(失败态=退出)
+        if (s.page == PG_EXPORT) {
+            s.code_page = 0;
+            s.dirty = true;
+            return;
+        }
+        if (s.page == PG_IMPORT) {
+            if (s.imp_failed) {
+                page_goto(PG_SETTINGS);
+            } else if (s.imp_pos > 0) {
+                s.imp_pos--;
+                s.imp_draft = 0;
+            }
+            s.dirty = true;
+            return;
+        }
         // 村庄:调节中长按确定=完成;非调节态长按确定=返回(与其他列表页一致,
         // 2026-10-07 C 项:此前村庄是唯一不支持长按返回的列表页);
         // 调节中长按上/下 = ±5
@@ -3156,6 +3438,11 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
             page_goto(PG_CONFIRM);
             return;
         }
+        // 存档码行长按 = 导入(短按 = 导出,见 list_action)
+        if (s.page == PG_SETTINGS && s.focus == 5) {
+            page_goto(PG_IMPORT);
+            return;
+        }
         // 长按返回;事件/战斗/确认页禁用(必须显式选择);远征中禁用
         // (2026-10-07 A 项:此前远征中长按确定会瞬移回家——背包战利品
         // 悬空、再出发被清袋,规则上远征只有走回村或战死两个出口)
@@ -3183,6 +3470,52 @@ static void key_task(void *arg) {
     (void)arg;
     key_event_t ke;
     while (!s_key_quit) {
+        // L3 深睡(§8.1 无操作 5min / §8.2 电量≤10% 硬保护):toast/日志先
+        // 留 1.5s 可见窗,然后锁内一次性 存档→关屏→GPIO 唤醒配置→深睡。
+        // esp_deep_sleep_start 不返回,锁永不释放,渲染任务天然被阻止
+        // (bsp_display_prepare_deep_sleep 要求"已阻止 LVGL 刷屏"的满足方式)。
+        if (s.deep_req) {
+            vTaskDelay(pdMS_TO_TICKS(1500));
+            if (bsp_lvgl_lock(1000)) {
+                save_all();
+                ESP_LOGI(TAG, "进入深睡(存档已落盘,唤醒=重启走离线结算)");
+                bsp_display_prepare_deep_sleep();
+                bsp_battery_sleep();
+                // GPIO0 低电平唤醒:松开态上拉 3300mV,按下最高档 595mV
+                // (< 数字低电平),三键全部有效;ADC 在深睡中不可用,
+                // 低电平判据只做"有键按下"级别的唤醒
+                esp_deep_sleep_enable_gpio_wakeup(1ULL << DR_BTN_GPIO,
+                                                  ESP_GPIO_WAKEUP_GPIO_LOW);
+                esp_deep_sleep_start();
+            }
+            continue;
+        }
+        // L2 浅睡(§8.1):1s RTC 定时打盹循环(三键为 ADC 分压,浅睡中
+        // ADC 无法采样/GPIO 唤醒不可用;打盹近似浅睡底电流)。醒来查队列
+        // 与 ADC,有键即退——唤醒键随后走 screen_off 吞键分支(与 L1 同
+        // 口径)。sleep_req 由 tick 持续重估,这里只消费;5min 深睡到点在
+        // 打盹间隙判断(浅睡中 tick 不跑)。
+        if (s.sleep_req) {
+            if (!s.screen_off) screen_off_now();   // 浅睡必先灭屏(L1 关档时补)
+            while (s.sleep_req && !s.deep_req && !s_key_quit) {
+                esp_sleep_enable_timer_wakeup(1000000);
+                esp_light_sleep_start();           // 全任务冻结,醒后时间连续
+                if (uxQueueMessagesWaiting(s_key_queue) > 0 ||
+                    (bsp_button_read_mv() >= 0 && bsp_button_read_mv() < 1900)) {
+                    // 有键即醒。顺手清请求:唤醒键处理后到下一轮 tick 重估
+                    // 之间,循环顶会再次读到 stale 的 true 而立刻熄屏回去
+                    // (实测复现:唤醒后 backlight 停在 0)
+                    s.sleep_req = false;
+                    break;
+                }
+                if (sleep_mode() >= 2u &&
+                    (uint32_t)(esp_timer_get_time() / 1000) - s.last_input_ms >=
+                        DR_DEEP_SLEEP_S * 1000u) {
+                    s.deep_req = true;             // 浅睡中到点:转深睡
+                    break;
+                }
+            }
+        }
         if (xQueueReceive(s_key_queue, &ke, pdMS_TO_TICKS(200)) == pdTRUE) {
             // I33 取证:每个按键事件附当时分压读数(仅日志,零行为变更;定位后撤)
             ESP_LOGI(TAG, "diag key btn=%d ev=%d mv=%d page=%d",
@@ -3364,6 +3697,22 @@ void dr_debug_set_outfit(void) {
     page_goto(PG_MAP);
 }
 
+// 模拟器诊断:导入页逐字符注入(SIM_TYPE_CODE)——按键脚本输百字符级
+// 存档码会超键位表容量,跳过"上/下换字"的按键路径直接喂字符流,实测
+// 帧头预读/自动校验/入账全链(换字按键路径由 8 键手测覆盖)。注入时若
+// 不在导入页(enter 后页面还在标题页),先自行切入。
+void dr_debug_type_code(const char *code) {
+    if (s.page != PG_IMPORT) page_goto(PG_IMPORT);
+    for (; *code; code++) {
+        const char *p = strchr(DR_CODE_B32, *code);
+        if (!p) continue;
+        s.imp_draft = (int)(p - DR_CODE_B32);
+        import_confirm_char();
+        if (s.imp_failed) return;
+        if (s.imp_total > 0 && s.imp_pos >= s.imp_total) return;   // 输满/已入账
+    }
+}
+
 // 模拟器诊断:打印对象树关键状态(仅主机构建使用)
 void dr_debug_dump(void) {
     ESP_LOGI(TAG, "dump page=%d focus=%d adj=%d wood=%lu pop=%u fire=%u hero=%u,%u dir=%d wild=%u",
@@ -3379,7 +3728,7 @@ void dr_sweep_next(void) {
     static const page_t order[] = {
         PG_TITLE, PG_HOME, PG_BUILD, PG_VILLAGE, PG_MAP, PG_RUIN,
         PG_COMBAT, PG_TRADE, PG_SETTINGS, PG_EVENT, PG_CONFIRM,
-        PG_SHIP, PG_FAB, PG_LIFTOFF, PG_ENDING,
+        PG_SHIP, PG_FAB, PG_LIFTOFF, PG_ENDING, PG_EXPORT, PG_IMPORT,
     };
     static int i = 0;
     page_goto(order[i % (sizeof(order) / sizeof(order[0]))]);

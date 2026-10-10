@@ -20,6 +20,8 @@ echo "== build =="
 "$CC" $CFLAGS -o test_dr_world test_dr_world.c "$SRC/dr_world.c" \
     "$SRC/dr_rules.c" "$SRC/dr_state.c" "$SRC/dr_util.c"
 "$CC" $CFLAGS -o test_dr_util test_dr_util.c "$SRC/dr_util.c"
+"$CC" $CFLAGS -o test_dr_savecode test_dr_savecode.c "$SRC/dr_savecode.c" \
+    "$SRC/dr_state.c" "$SRC/dr_util.c"
 
 echo "== run =="
 ./test_dr_state
@@ -27,4 +29,5 @@ echo "== run =="
 ./test_dr_rules
 ./test_dr_world
 ./test_dr_util
+./test_dr_savecode
 echo "all host tests passed"

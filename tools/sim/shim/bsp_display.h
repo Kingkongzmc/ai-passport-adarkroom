@@ -10,3 +10,9 @@ static inline void bsp_lvgl_unlock(void) { sim_lvgl_unlock(); }
 // 背光桩:记录最近档位(熄屏功能模拟器断言用;定义在各驱动 main 文件)
 extern int g_sim_backlight;
 static inline void bsp_display_backlight(uint8_t percent) { g_sim_backlight = percent; }
+
+// 深睡准备桩:仅记录背光归零(浅睡/深睡流程的模拟器冒烟用)
+static inline int bsp_display_prepare_deep_sleep(void) {
+    g_sim_backlight = 0;
+    return 0;
+}
