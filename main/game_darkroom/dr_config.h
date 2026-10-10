@@ -11,7 +11,7 @@ extern "C" {
 #endif
 
 // ---- 存档 ----
-#define DR_SAVE_VERSION   5u      // 存档结构版本,迁移见 dr_state.h(v5:窃贼)
+#define DR_SAVE_VERSION   6u      // 存档结构版本,迁移见 dr_state.h(v6:能量元件/星舰/周目)
 #define DR_SAVE_NVS_KEY   "dr_save"
 #define DR_FLAG_BITS      64      // 剧情标记位数(事件表引用 0..63)
 
@@ -35,6 +35,10 @@ extern "C" {
 #define DR_FLAG_PERK_BARBARIAN  18u  // 蛮力:近战伤害 ×1.5 向下取整(原版)
 #define DR_FLAG_PERK_STEALTHY   19u  // 潜行:遭遇触发率减半(原版 FIGHT_CHANCE)
 #define DR_FLAG_THIEF_ACTIVE    20u  // 窃贼进行中(解决时清除;事件轮询门)
+// M5 第四幕(星舰/结局;空位 21 起)
+#define DR_FLAG_SHIP_OPEN       21u  // 星舰页签解锁(踏上坠毁星舰格,原版 features.location.spaceShip)
+#define DR_FLAG_SHIP_SEEN       22u  // 首访星舰页通知已发(原版 spaceShip.seenShip)
+#define DR_FLAG_LIFT_WARNED     23u  // 升空确认"不再回来"已见(原版 spaceShip.seenWarning)
 
 // ---- 资源(原版 stores;布局红线:只在尾部追加,不得中间插入) ----
 typedef enum {
@@ -56,6 +60,9 @@ typedef enum {
     DR_RES_TEETH,         // 牙(v3 尾插;陷阱掉落/贸易)
     DR_RES_CLOTH,         // 布(v3 尾插;陷阱掉落)
     DR_RES_MEDICINE,      // 药(v4 尾插;贸易购入,远征治疗 +20HP)
+    DR_RES_ENERGY_CELL,   // 能量元件(v6 尾插;病人事件/激光步枪弹药,M5)
+    DR_RES_GRENADE,       // 手雷(v6 尾插;制造台造,战斗消耗品 15 伤)
+    DR_RES_BOLAS,         // 流星锤(v6 尾插;制造台造,战斗消耗品 眩晕)
     DR_RES_KIND_COUNT,
 } dr_res_t;
 

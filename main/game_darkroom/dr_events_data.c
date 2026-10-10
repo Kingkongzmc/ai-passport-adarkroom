@@ -66,6 +66,9 @@ enum {
     DR_EV_THIEF, DR_EV_THIEF_HANGED, DR_EV_THIEF_SPARED,
     DR_EV_SCOUT,
     DR_EV_MASTER, DR_EV_MASTER_AGREE,
+    // ---- M5(只许尾部追加:event_count 按下标落盘,中间插入会错位存档) ----
+    DR_EV_SICKMAN_CELL,     // 病人 cells 分支(能量元件 v6 实装后还原原版权重)
+    DR_EV_EXEC, DR_EV_EXEC_PEACE,   // 执行者(星舰首访;scene 0 不轮询,UI 触发)
 };
 
 static const dr_event_t k_events[] = {
@@ -342,8 +345,8 @@ static const dr_event_t k_events[] = {
         .choice_count = 1,
     },
 
-    // ---- 病人(room.js The Sick Man:1 药 → 10% 异金/30% 能量元件/50% 鳞;
-    //      能量元件未实装(M5 资源),并入鳞档:异金 10%/鳞 44.5%/落空) ----
+    // ---- 病人(room.js The Sick Man:1 药 → 10% 异金/30% 能量元件×3/50% 鳞×5;
+    //      v6 能量元件实装,还原原版四分支权重 100/300/500/落空) ----
     [DR_EV_SICKMAN] = {
         .text_id = DR_T_EV_SICKMAN, .scene_mask = DR_SCENE_HOME,
         .priority = 10, .cooldown_s = 300,
@@ -351,9 +354,9 @@ static const dr_event_t k_events[] = {
         .choices = {
             COST_CH(DR_T_EV_GIVE_MED, DR_RES_MEDICINE, 1,
                 E(DR_EFF_GOTO_W, DR_EV_SICKMAN_ALLOY, 100),
-                E(DR_EFF_GOTO_W, DR_EV_SICKMAN_SC, 445),
-                E(DR_EFF_GOTO_EVENT, DR_EV_SICKMAN_NONE, 0),
-                EFF_NONE),
+                E(DR_EFF_GOTO_W, DR_EV_SICKMAN_CELL, 300),
+                E(DR_EFF_GOTO_W, DR_EV_SICKMAN_SC, 500),
+                E(DR_EFF_GOTO_EVENT, DR_EV_SICKMAN_NONE, 0)),
             FREE_CH(DR_T_EV_SEND_AWAY, EFF_NONE, EFF_NONE, EFF_NONE, EFF_NONE),
         },
         .choice_count = 2,
@@ -376,6 +379,17 @@ static const dr_event_t k_events[] = {
         .choices = {
             FREE_CH(DR_T_UI_BACK,
                 E(DR_EFF_RES_ADD, DR_RES_SCALES, 5),
+                EFF_NONE, EFF_NONE, EFF_NONE),
+        },
+        .choice_count = 1,
+    },
+    [DR_EV_SICKMAN_CELL] = {
+        .text_id = DR_T_EV_SICKMAN_CELL, .scene_mask = 0,
+        .priority = 0, .cooldown_s = 0,
+        .conds = { COND_NONE, COND_NONE, COND_NONE, COND_NONE },
+        .choices = {
+            FREE_CH(DR_T_UI_BACK,
+                E(DR_EFF_RES_ADD, DR_RES_ENERGY_CELL, 3),
                 EFF_NONE, EFF_NONE, EFF_NONE),
         },
         .choice_count = 1,
@@ -711,6 +725,31 @@ static const dr_event_t k_events[] = {
                     EFF_NONE),
         },
         .choice_count = 4,
+    },
+    // ---- 执行者(M5;原版 events/executioner.js 的星舰守卫,设备适配简化为
+    //      首访星舰页触发:给 1 异星合金 = 和解(制造台解锁)/ 拒绝 = 遭遇战,
+    //      战斗由 UI 桥接启动(事件引擎够不着战斗态),敌人取士兵表) ----
+    [DR_EV_EXEC] = {
+        .text_id = DR_T_EV_EXEC, .scene_mask = 0,
+        .priority = 0, .cooldown_s = 0,
+        .conds = { COND_NONE, COND_NONE, COND_NONE, COND_NONE },
+        .choices = {
+            COST_CH(DR_T_EV_EXEC_GIVE, DR_RES_ALIEN, 1,
+                E(DR_EFF_EXEC_SET, 0, 1),
+                E(DR_EFF_GOTO_EVENT, DR_EV_EXEC_PEACE, 0),
+                EFF_NONE, EFF_NONE),
+            FREE_CH(DR_T_EV_EXEC_REFUSE, EFF_NONE, EFF_NONE, EFF_NONE, EFF_NONE),
+        },
+        .choice_count = 2,
+    },
+    [DR_EV_EXEC_PEACE] = {
+        .text_id = DR_T_EV_EXEC_PEACE, .scene_mask = 0,
+        .priority = 0, .cooldown_s = 0,
+        .conds = { COND_NONE, COND_NONE, COND_NONE, COND_NONE },
+        .choices = {
+            FREE_CH(DR_T_UI_BACK, EFF_NONE, EFF_NONE, EFF_NONE, EFF_NONE),
+        },
+        .choice_count = 1,
     },
 };
 

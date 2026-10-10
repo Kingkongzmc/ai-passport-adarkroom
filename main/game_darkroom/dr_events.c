@@ -4,6 +4,14 @@
 #include "dr_events.h"
 #include "dr_util.h"
 
+uint16_t dr_events_find(uint16_t text_id) {
+    uint16_t count = 0;
+    const dr_event_t *ev = dr_events_table(&count);
+    for (uint16_t i = 0; i < count; i++)
+        if (ev[i].text_id == text_id) return i;
+    return 0xFFFFu;
+}
+
 // 减员裁岗:在编总数不得超过人口,否则幽灵工人照常产出(§3.3 硬化)。
 // 从职业表尾端撤起(确定性,便于测试;尾端未用槽位恒 0 不影响结果)。
 static void clip_jobs(dr_game_t *g) {
@@ -202,6 +210,10 @@ static void eff_apply(const dr_eff_t *f, dr_game_t *g, dr_rng_t *rng,
             g->thieves_lv = 2;
             g->flags &= ~((uint64_t)1u << DR_FLAG_THIEF_ACTIVE);
             g->flags |= (uint64_t)1u << DR_FLAG_PERK_STEALTHY;
+            break;
+        case DR_EFF_EXEC_SET:
+            // 执行者了结(M5):1=收下合金和解 2=被击溃;制造台随之解锁
+            g->exec_state = (uint8_t)f->arg2;
             break;
         case DR_EFF_NONE:
             break;

@@ -618,7 +618,7 @@ static void test_table_data_valid(void) {
             for (int k = 0; k < 4; k++) {
                 uint8_t op = ch->effects[k].op;
                 if (op == DR_EFF_NONE) break;
-                assert(op <= DR_EFF_THIEF_SPARE);      // 已知效果码
+                assert(op <= DR_EFF_EXEC_SET);         // 已知效果码
                 if (op == DR_EFF_GOTO_EVENT || op == DR_EFF_GOTO_W)
                     assert((uint16_t)ch->effects[k].arg1 < count);  // 链在表内
                 if (op == DR_EFF_RES_ADD)
@@ -660,6 +660,44 @@ static void test_beggar_flow(void) {
     assert(sums == 20);                    // 恰一支 +20
 }
 
+// 端到端 M5:病人 cells 分支还原(能量元件 ×3)与执行者和解链
+static void test_sickman_cell_and_exec(void) {
+    uint16_t count = 0;
+    const dr_event_t *ev = dr_events_table(&count);
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    dr_event_session_t sess;
+    dr_event_session_init(&sess);
+    dr_rng_t rng;
+    dr_rng_seed(&rng, 3);
+
+    uint16_t cell = dr_events_find(DR_T_EV_SICKMAN_CELL);
+    uint16_t exec = dr_events_find(DR_T_EV_EXEC);
+    uint16_t peace = dr_events_find(DR_T_EV_EXEC_PEACE);
+    assert(cell < count && exec < count && peace < count);
+    // 链式事件不轮询(scene_mask = 0)
+    assert(ev[cell].scene_mask == 0 && ev[exec].scene_mask == 0);
+
+    // 病人 cells 分支:无代价"返回",+3 能量元件(原版 sick man cells)
+    assert(dr_event_choose(ev, count, &g, &sess, 1000, &rng, cell, 0) == -1);
+    assert(g.res[DR_RES_ENERGY_CELL] == 3 &&
+           g.res_total[DR_RES_ENERGY_CELL] == 3);
+
+    // 执行者:给 1 异星合金 → 合金 -1、exec_state=1(制造台解锁)、链到和解
+    assert(!dr_event_choice_affordable(&ev[exec], 0, &g));   // 无合金不可选
+    g.res[DR_RES_ALIEN] = 1;
+    assert(dr_event_choice_affordable(&ev[exec], 0, &g));
+    assert(dr_event_choose(ev, count, &g, &sess, 1000, &rng, exec, 0)
+           == (int16_t)peace);
+    assert(g.res[DR_RES_ALIEN] == 0 && g.exec_state == 1);
+    // 和解页:返回收尾(-1 结束链)
+    assert(dr_event_choose(ev, count, &g, &sess, 1000, &rng, peace, 0) == -1);
+    // 拒绝选项无效果直出(战斗由 UI 桥接,引擎侧仅 -1 收尾)
+    g.exec_state = 0;
+    assert(dr_event_choose(ev, count, &g, &sess, 1000, &rng, exec, 1) == -1);
+    assert(g.exec_state == 0);   // 引擎不动战斗态
+}
+
 #define RUN(t) do { printf("%s\n", #t); fflush(stdout); t(); } while (0)
 int main(void) {
     RUN(test_table_not_empty);
@@ -678,6 +716,7 @@ int main(void) {
     RUN(test_five_choices);
     RUN(test_thief_effects);
     RUN(test_nomad_and_master_flow);
+    RUN(test_sickman_cell_and_exec);
     printf("test_dr_events: all passed\n");
     return 0;
 }

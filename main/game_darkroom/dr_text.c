@@ -56,6 +56,7 @@ static const char *k_texts[] = {
     [DR_T_EV_SICKMAN]      = "一个男人咳着嗽挪到门口,乞求一剂药。",
     [DR_T_EV_SICKMAN_ALLOY] = "他留下谢礼:旅行中捡到的一块怪金属。",
     [DR_T_EV_SICKMAN_SC]   = "他掏空了口袋,只有几片鳞。",
+    [DR_T_EV_SICKMAN_CELL] = "他留下谢礼:几只微光发亮的小盒子,说是旅途中捡的。",
     [DR_T_EV_SICKMAN_NOTHING] = "他道过谢,蹒跚着走远了。",
 
     [DR_T_EV_TRAPS]        = "几个陷阱被扯得稀烂。巨大的脚印一路延伸进森林。",
@@ -105,6 +106,12 @@ static const char *k_texts[] = {
     [DR_T_EV_MASTER_PRECISION] = "学精准",
     [DR_T_EV_MASTER_FORCE] = "学蛮力",
     [DR_T_EV_MASTER_NOTHING] = "不必了",
+
+    // ---- M5 第四幕(原版 executioner.js/ship.js,中文重写) ----
+    [DR_T_EV_EXEC]         = "舱室深处,一台锈蚀的机械守卫缓缓转过头,红色的独眼打量着你。它伸出一只手,掌心向上,像在等什么东西。",
+    [DR_T_EV_EXEC_GIVE]    = "给异星合金",
+    [DR_T_EV_EXEC_REFUSE]  = "拒绝",
+    [DR_T_EV_EXEC_PEACE]   = "守卫把合金吞进胸腔,嗡鸣着退到墙边。舱室另一端,一台制造台亮了起来,发出熟悉的低鸣。",
 };
 
 const char *dr_text(uint16_t id) {

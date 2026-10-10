@@ -203,6 +203,23 @@ uint32_t dr_rules_craft_need(const dr_game_t *g, uint8_t craft, uint8_t res);
 // 可立即制造:可见 + (未拥有,或火把) + 材料足额(UI 行可选判定)
 bool dr_rules_craft_ready(const dr_game_t *g, uint8_t craft);
 
+// ---- 制造台(星舰页"制造"行;执行者事件了结后解锁,M5) ----
+// 原版 fabricator.js 为 Expansion 新增且造的是能量刃/等离子枪,本四件
+// 按 M5 拍板造价(激光步枪/刺刀)+ room.js TradeGoods 牌价(手雷/流星锤)。
+// 武器数值取原版 world.js Weapons:刺刀 8 近战 / 激光步枪 8 耗 1 元件。
+typedef enum {
+    DR_FAB_BAYONET = 0,   // 刺刀:1 铁+50 木 → 武器 5(近战 8)
+    DR_FAB_LASER_RIFLE,   // 激光步枪:1 能量元件+50 木 → 武器 6(8,每击耗 1 元件)
+    DR_FAB_GRENADE,       // 手雷:100 鳞+50 牙 → +1(消耗品,战斗 15 伤)
+    DR_FAB_BOLAS,         // 流星锤:10 牙 → +1(消耗品,战斗眩晕 2 回合)
+    DR_FAB_KIND_COUNT,
+} dr_fab_t;
+bool dr_fab_unlocked(const dr_game_t *g);   // 执行者已了结(exec_state != 0)
+bool dr_fab_owned(const dr_game_t *g, uint8_t fab);     // 武器按阶,消耗品恒可重造
+uint32_t dr_fab_need(const dr_game_t *g, uint8_t fab, uint8_t res);
+bool dr_fab_ready(const dr_game_t *g, uint8_t fab);     // 解锁+未拥有+材料足额
+bool dr_fab_make(dr_game_t *g, uint8_t fab);
+
 // ---- 贸易(原版 TradeGoods:游牧商人只买不卖,以毛/鳞/牙支付) ----
 typedef enum {
     DR_TRADE_SCALES = 0,  // 鳞:150 毛
@@ -213,9 +230,32 @@ typedef enum {
     DR_TRADE_BULLETS,     // 子弹:10 鳞
     DR_TRADE_MEDICINE,    // 药:50 鳞 + 30 牙(v4 尾插;远征治疗 +20HP)
     DR_TRADE_COMPASS,     // 罗盘:400 毛 + 20 鳞 + 10 牙(限 1;M4 世界坐标)
+    DR_TRADE_ENERGY_CELL, // 能量元件:10 鳞 + 10 牙(v6 尾插,M5;原版 TradeGoods)
+    DR_TRADE_ALIEN,       // 异星合金:1500 毛 + 750 鳞 + 300 牙(M5;原版 TradeGoods)
     DR_TRADE_KIND_COUNT,
 } dr_trade_t;
 bool dr_rules_trade_buy(dr_game_t *g, uint8_t item);   // 需已建贸易站
+
+// ---- 星舰(原版 ship.js,2026-10-10 源码取证;M5 第四幕) ----
+#define DR_SHIP_ALLOY_PER_HULL      1u   // 加固船壳:1 异星合金/点(ALLOY_PER_HULL)
+#define DR_SHIP_ALLOY_PER_THRUSTER  1u   // 升级引擎:1 异星合金/个(ALLOY_PER_THRUSTER)
+#define DR_SHIP_LIFTOFF_COOLDOWN_S  120u // 升空冷却(LIFTOFF_COOLDOWN)
+bool dr_ship_reinforce(dr_game_t *g);    // hull+1(合金不足 false)
+bool dr_ship_upgrade(dr_game_t *g);      // thrusters+1(合金不足 false)
+bool dr_ship_can_liftoff(const dr_game_t *g);   // 原版:hull > 0 才点亮升空钮
+// 升空磨难段(space.js 高度推进的设备适配):推进器 ≥4 直达;
+// 每缺 1 加 1 段"燃料不足漂流"(每段 hull -1,归零 = 坠毁)。
+#define DR_SHIP_DRIFT_FREE  4u
+uint8_t dr_ship_drift_segments(const dr_game_t *g);
+
+// ---- 周目继承(原版 prestige.js,2026-10-10 源码取证;M5) ----
+// storesMap 折算:'g' 木/毛/肉/铁/煤/硫/钢/干肉/鳞/牙/革/饵/布 ÷(1..9,0→1);
+//               'a' 子弹/能量元件/手雷/流星锤 ÷(1..10)×(1..10);
+// 武器/护甲/Perk:用户拍板直接继承(原版武器按件数 ÷(0..4),本作为阶级制)。
+// 火把/护符/水/药/异星合金不在 storesMap,不继承(原版同口径)。
+void dr_prestige_save(dr_game_t *g, dr_rng_t *rng);
+// 开新周目:保留遗产段与通关次数,其余按新种子重开;遗产即刻入账并清零。
+void dr_prestige_new_game(dr_game_t *g, uint32_t seed, uint32_t now_ts);
 
 // ---- 陷阱:手动查看(原版 checkTraps) ----
 // 冷却走满后结算:掉落件数 = 陷阱数 + min(饵, 陷阱数)(饵自动消耗,原版无开关);

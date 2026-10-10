@@ -506,6 +506,64 @@ bool dr_rules_craft_ready(const dr_game_t *g, uint8_t craft) {
     return true;
 }
 
+// ---- 制造台(M5;原版 fabricator.js,解锁口径见 dr_fab_unlocked) ----
+typedef struct {
+    uint16_t res[DR_RES_KIND_COUNT];  // 材料数(下标即资源)
+    uint8_t  weapon;                  // 造后 weapon_lv(0=非武器)
+    uint8_t  grant_res;               // 消耗品产出资源(0xFF=无)
+    uint16_t grant_n;                 // 产出数量
+} dr_fab_def_t;
+
+static const dr_fab_def_t k_fabs[DR_FAB_KIND_COUNT] = {
+    [DR_FAB_BAYONET]     = { .res = { [DR_RES_WOOD]=50, [DR_RES_IRON]=1 },
+                             .weapon = 5, .grant_res = 0xFF },
+    [DR_FAB_LASER_RIFLE] = { .res = { [DR_RES_WOOD]=50, [DR_RES_ENERGY_CELL]=1 },
+                             .weapon = 6, .grant_res = 0xFF },
+    [DR_FAB_GRENADE]     = { .res = { [DR_RES_SCALES]=100, [DR_RES_TEETH]=50 },
+                             .grant_res = DR_RES_GRENADE, .grant_n = 1 },
+    [DR_FAB_BOLAS]       = { .res = { [DR_RES_TEETH]=10 },
+                             .grant_res = DR_RES_BOLAS, .grant_n = 1 },
+};
+
+bool dr_fab_unlocked(const dr_game_t *g) {
+    return g->exec_state != 0;   // 执行者和解(1)或击溃(2)后制造台上线
+}
+
+bool dr_fab_owned(const dr_game_t *g, uint8_t fab) {
+    if (fab >= DR_FAB_KIND_COUNT) return false;
+    const dr_fab_def_t *f = &k_fabs[fab];
+    if (f->weapon != 0) return g->weapon_lv >= f->weapon;
+    return false;   // 消耗品与火把同款:可重复制造
+}
+
+uint32_t dr_fab_need(const dr_game_t *g, uint8_t fab, uint8_t res) {
+    (void)g;
+    if (fab >= DR_FAB_KIND_COUNT || res >= DR_RES_KIND_COUNT) return 0;
+    return k_fabs[fab].res[res];
+}
+
+bool dr_fab_ready(const dr_game_t *g, uint8_t fab) {
+    if (fab >= DR_FAB_KIND_COUNT) return false;
+    if (!dr_fab_unlocked(g) || dr_fab_owned(g, fab)) return false;
+    const dr_fab_def_t *f = &k_fabs[fab];
+    for (int i = 0; i < DR_RES_KIND_COUNT; i++)
+        if (g->res[i] < f->res[i]) return false;
+    return true;
+}
+
+bool dr_fab_make(dr_game_t *g, uint8_t fab) {
+    if (!dr_fab_ready(g, fab)) return false;
+    const dr_fab_def_t *f = &k_fabs[fab];
+    for (int i = 0; i < DR_RES_KIND_COUNT; i++)
+        g->res[i] -= f->res[i];
+    if (f->weapon > g->weapon_lv) g->weapon_lv = f->weapon;
+    if (f->grant_res != 0xFF) {
+        g->res[f->grant_res] += f->grant_n;
+        g->res_total[f->grant_res] += f->grant_n;
+    }
+    return true;
+}
+
 // ---- 贸易(原版 TradeGoods:只买不卖) ----
 typedef struct {
     uint32_t fur, scales, teeth;
@@ -519,6 +577,8 @@ static const dr_trade_cost_t k_trade_cost[DR_TRADE_KIND_COUNT] = {
     [DR_TRADE_BULLETS]= { 0, 10, 0 },
     [DR_TRADE_MEDICINE]= { 0, 50, 30 },
     [DR_TRADE_COMPASS]= { 400, 20, 10 },
+    [DR_TRADE_ENERGY_CELL]= { 0, 10, 10 },
+    [DR_TRADE_ALIEN]  = { 1500, 750, 300 },
 };
 
 bool dr_rules_trade_buy(dr_game_t *g, uint8_t item) {
@@ -541,6 +601,8 @@ bool dr_rules_trade_buy(dr_game_t *g, uint8_t item) {
         case DR_TRADE_STEEL:  g->res[DR_RES_STEEL] += 1; break;
         case DR_TRADE_BULLETS:g->res[DR_RES_BULLETS] += 1; break;
         case DR_TRADE_MEDICINE: g->res[DR_RES_MEDICINE] += 1; break;
+        case DR_TRADE_ENERGY_CELL: g->res[DR_RES_ENERGY_CELL] += 1; break;
+        case DR_TRADE_ALIEN:  g->res[DR_RES_ALIEN] += 1; break;
         case DR_TRADE_COMPASS:
             g->flags |= (uint64_t)1u << DR_FLAG_COMPASS;
             break;
@@ -555,9 +617,96 @@ bool dr_rules_trade_buy(dr_game_t *g, uint8_t item) {
         case DR_TRADE_STEEL:  g->res_total[DR_RES_STEEL] += 1; break;
         case DR_TRADE_BULLETS:g->res_total[DR_RES_BULLETS] += 1; break;
         case DR_TRADE_MEDICINE: g->res_total[DR_RES_MEDICINE] += 1; break;
+        case DR_TRADE_ENERGY_CELL: g->res_total[DR_RES_ENERGY_CELL] += 1; break;
+        case DR_TRADE_ALIEN:  g->res_total[DR_RES_ALIEN] += 1; break;
         default: break;
     }
     return true;
+}
+
+// ---- 星舰(原版 ship.js) ----
+bool dr_ship_reinforce(dr_game_t *g) {
+    if (g->res[DR_RES_ALIEN] < DR_SHIP_ALLOY_PER_HULL) return false;
+    g->res[DR_RES_ALIEN] -= DR_SHIP_ALLOY_PER_HULL;
+    if (g->ship_hull < 255u) g->ship_hull++;
+    return true;
+}
+
+bool dr_ship_upgrade(dr_game_t *g) {
+    if (g->res[DR_RES_ALIEN] < DR_SHIP_ALLOY_PER_THRUSTER) return false;
+    g->res[DR_RES_ALIEN] -= DR_SHIP_ALLOY_PER_THRUSTER;
+    if (g->ship_thrusters < 255u) g->ship_thrusters++;
+    return true;
+}
+
+bool dr_ship_can_liftoff(const dr_game_t *g) {
+    return g->ship_hull > 0;
+}
+
+uint8_t dr_ship_drift_segments(const dr_game_t *g) {
+    return (g->ship_thrusters >= DR_SHIP_DRIFT_FREE)
+               ? 0u : (uint8_t)(DR_SHIP_DRIFT_FREE - g->ship_thrusters);
+}
+
+// ---- 周目继承(原版 prestige.js) ----
+// storesMap 'g' 类(一般物资):各自掷除数 1..9(floor(rand*10),0→1)
+static const uint8_t k_prestige_g[] = {
+    DR_RES_WOOD, DR_RES_FUR, DR_RES_MEAT, DR_RES_IRON, DR_RES_COAL,
+    DR_RES_SULPHUR, DR_RES_STEEL, DR_RES_FOOD, DR_RES_SCALES,
+    DR_RES_TEETH, DR_RES_LEATHER, DR_RES_BAIT, DR_RES_CLOTH,
+};
+// storesMap 'a' 类(弹药):除数 (1..10)×(1..10),折损最重
+static const uint8_t k_prestige_a[] = {
+    DR_RES_BULLETS, DR_RES_ENERGY_CELL, DR_RES_GRENADE, DR_RES_BOLAS,
+};
+#define DR_PRESTIGE_PERK_MASK \
+    (((uint64_t)1u << DR_FLAG_PERK_SCOUT) | \
+     ((uint64_t)1u << DR_FLAG_PERK_EVASIVE) | \
+     ((uint64_t)1u << DR_FLAG_PERK_PRECISE) | \
+     ((uint64_t)1u << DR_FLAG_PERK_BARBARIAN) | \
+     ((uint64_t)1u << DR_FLAG_PERK_STEALTHY))
+
+void dr_prestige_save(dr_game_t *g, dr_rng_t *rng) {
+    memset(g->legacy_res, 0, sizeof(g->legacy_res));
+    for (unsigned i = 0; i < sizeof(k_prestige_g); i++) {
+        uint8_t r = k_prestige_g[i];
+        uint32_t div = dr_rng_below(rng, 10);   // floor(rand*10)
+        if (div == 0) div = 1;                  // 原版:0 按 1 计
+        g->legacy_res[r] = g->res[r] / div;
+    }
+    for (unsigned i = 0; i < sizeof(k_prestige_a); i++) {
+        uint8_t r = k_prestige_a[i];
+        uint32_t div = (dr_rng_below(rng, 10) + 1u) *
+                       (dr_rng_below(rng, 10) + 1u);   // (1..10)×(1..10)
+        g->legacy_res[r] = g->res[r] / div;
+    }
+    g->legacy_perks = g->flags & DR_PRESTIGE_PERK_MASK;
+    g->legacy_weapon_lv = g->weapon_lv;
+    g->legacy_armor_lv = g->armor_lv;
+    g->legacy_pending = 1;
+    g->won_this_run = 1;
+    if (g->prestige_count < 0xFFFFu) g->prestige_count++;
+}
+
+void dr_prestige_new_game(dr_game_t *g, uint32_t seed, uint32_t now_ts) {
+    // 先捞出遗产段(dr_game_init 会全量清零)
+    uint32_t legacy_res[DR_RES_KIND_COUNT];
+    memcpy(legacy_res, g->legacy_res, sizeof(legacy_res));
+    uint64_t perks = g->legacy_perks;
+    uint8_t wlv = g->legacy_weapon_lv, alv = g->legacy_armor_lv;
+    uint16_t count = g->prestige_count;
+
+    dr_game_init(g, seed, now_ts);
+    for (int i = 0; i < DR_RES_KIND_COUNT; i++) {
+        if (!legacy_res[i]) continue;
+        g->res[i] += legacy_res[i];
+        g->res_total[i] += legacy_res[i];
+    }
+    g->flags |= perks;
+    g->weapon_lv = wlv;
+    g->armor_lv = alv;
+    g->prestige_count = count;
+    // legacy_* 保持清零态:遗产已入账,不再重复发
 }
 
 // 陌生人"沉睡→帮忙"(原版 Room.onArrival:玩家回到房间时触发,非自动)

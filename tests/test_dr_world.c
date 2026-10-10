@@ -540,6 +540,137 @@ static void test_scout_reveal(void) {
     assert(wide == 41);                    // 2r²+2r+1,r=4
 }
 
+// ---- M5 武器梯队扩展:刺刀(5)/激光步枪(6)+ 能量元件/手雷/流星锤携带 ----
+static void test_m5_weapons(void) {
+    dr_world_t w;
+    dr_world_gen(&w, 7);
+    dr_game_t g;
+    dr_game_init(&g, 7, 1000);
+
+    // 伤害表(原版 world.js):刺刀 8 / 激光步枪 8
+    assert(dr_world_weapon_dmg(5) == 8 && dr_world_weapon_dmg(6) == 8);
+
+    // 激光步枪:每击耗 1 携带元件;无件退化为拳(1 伤,与步枪无弹同款)
+    g.res[DR_RES_FOOD] = 10;
+    assert(dr_world_outfit_add(&w, &g, DR_RES_FOOD, 5));
+    assert(dr_world_embark(&w, &g));
+    g.weapon_lv = 6;
+    w.carry_cells = 1;
+    w.fight_enemy = DR_ENEMY_SOLDIER;   // 50 HP:8 伤打不死,只看弹药消耗
+    w.fight_hp = 50;
+    w.fight_round = 0;
+    uint16_t hp0 = w.fight_hp;
+    (void)dr_world_fight_attack(&w, &g);
+    assert(w.carry_cells == 0);                    // 元件已耗
+    if (dr_world_fight_active(&w))
+        assert(w.fight_hp == hp0 - 8 || w.fight_hp == hp0);   // 命中 8 / 挥空
+    // 无件第二击:伤害退化(50 HP 池足够观察两轮)
+    if (dr_world_fight_active(&w)) {
+        hp0 = w.fight_hp;
+        (void)dr_world_fight_attack(&w, &g);
+        assert(w.fight_hp >= hp0 - 8);            // 至多 8(实际 1 伤或挥空)
+    }
+
+    // 蛮力 Perk:刺刀(近战)×1.5 → 12;激光步枪(远程)不加成
+    dr_world_t w2;
+    dr_world_gen(&w2, 7);
+    dr_game_t g2;
+    dr_game_init(&g2, 7, 1000);
+    g2.res[DR_RES_FOOD] = 10;
+    assert(dr_world_outfit_add(&w2, &g2, DR_RES_FOOD, 5));
+    assert(dr_world_embark(&w2, &g2));
+    g2.weapon_lv = 5;
+    g2.flags |= (uint64_t)1u << DR_FLAG_PERK_BARBARIAN |
+                (uint64_t)1u << DR_FLAG_PERK_PRECISE;   // 90% 命中,统计更稳
+    w2.fight_enemy = DR_ENEMY_SOLDIER;
+    w2.fight_hp = 50;
+    w2.fight_round = 0;
+    int saw12 = 0;
+    for (int i = 0; i < 40 && dr_world_fight_active(&w2); i++) {
+        uint16_t before = w2.fight_hp;
+        (void)dr_world_fight_attack(&w2, &g2);
+        if (dr_world_fight_active(&w2) && before - w2.fight_hp == 12) saw12 = 1;
+    }
+    assert(saw12);   // 40 击内至少一见 12 伤(8×1.5)
+
+    // 手雷:15 伤耗 1;50 HP 士兵三雷内结束
+    dr_world_t w3;
+    dr_world_gen(&w3, 7);
+    dr_game_t g3;
+    dr_game_init(&g3, 7, 1000);
+    g3.res[DR_RES_FOOD] = 10;
+    assert(dr_world_outfit_add(&w3, &g3, DR_RES_FOOD, 5));
+    assert(dr_world_embark(&w3, &g3));
+    w3.carry_grenades = 3;
+    w3.fight_enemy = DR_ENEMY_SOLDIER;
+    w3.fight_hp = 50;
+    w3.fight_round = 0;
+    int guard = 0;
+    while (dr_world_fight_active(&w3) && guard++ < 30) {
+        if (w3.carry_grenades > 0) (void)dr_world_fight_grenade(&w3, &g3);
+        else (void)dr_world_fight_attack(&w3, &g3);
+        if (g3.hero_hp == 0) break;   // 被反击打死也合法(统计性)
+    }
+    assert(w3.carry_grenades < 3);   // 雷确实在消耗
+
+    // 无雷:动作拒绝
+    w3.carry_grenades = 0;
+    assert(dr_world_fight_grenade(&w3, &g3) == DR_FIGHT_NONE ||
+           !dr_world_fight_active(&w3));
+
+    // 流星锤:命中 → 敌人停摆两回合(ENEMY_SKIP 连见)
+    dr_world_t w4;
+    dr_world_gen(&w4, 7);
+    dr_game_t g4;
+    dr_game_init(&g4, 7, 1000);
+    g4.res[DR_RES_FOOD] = 10;
+    assert(dr_world_outfit_add(&w4, &g4, DR_RES_FOOD, 5));
+    assert(dr_world_embark(&w4, &g4));
+    w4.carry_bolas = 6;
+    w4.fight_enemy = DR_ENEMY_SOLDIER;
+    w4.fight_hp = 50;
+    w4.fight_round = 0;
+    int stunned = 0;
+    for (int i = 0; i < 30 && !stunned; i++) {
+        dr_fight_result_t r = dr_world_fight_bolas(&w4, &g4);
+        if (r == DR_FIGHT_STUN) {
+            stunned = 1;
+            assert(w4.fight_stun == 2);
+            // 接下来两次敌方回合必停摆(玩家任意动作喂掉回合)
+            dr_fight_result_t a = dr_world_fight_attack(&w4, &g4);
+            dr_fight_result_t b = dr_world_fight_attack(&w4, &g4);
+            (void)a; (void)b;
+            assert(w4.fight_stun == 0);
+        }
+    }
+    assert(stunned);   // 6 锤 80% 命中,30 次内必中
+
+    // 承重(path.js):元件 0.2/手雷 1/流星锤 0.5/激光步枪 5/刺刀 1
+    dr_world_t w5;
+    dr_world_gen(&w5, 7);
+    dr_game_t g5;
+    dr_game_init(&g5, 7, 1000);
+    g5.res[DR_RES_ENERGY_CELL] = 5;
+    g5.res[DR_RES_GRENADE] = 2;
+    g5.res[DR_RES_BOLAS] = 2;
+    assert(dr_world_outfit_add(&w5, &g5, DR_RES_ENERGY_CELL, 5));   // 1.0
+    assert(dr_world_outfit_add(&w5, &g5, DR_RES_GRENADE, 2));       // 2.0
+    assert(dr_world_outfit_add(&w5, &g5, DR_RES_BOLAS, 2));         // 1.0
+    assert(dr_world_bag_weight(&g5, &w5) == 40);
+    g5.weapon_lv = 6;
+    assert(dr_world_bag_weight(&g5, &w5) == 90);                    // +激光步枪 5.0
+    g5.weapon_lv = 5;
+    assert(dr_world_bag_weight(&g5, &w5) == 50);                    // 刺刀 1.0
+    // 回家入库:携带的元件/手雷/流星锤全量回库(arrive_home 口径)
+    g5.in_wilderness = 1;
+    g5.water = 5; g5.food = 5;
+    g5.hero_x = DR_WORLD_CENTER; g5.hero_y = DR_WORLD_CENTER;
+    assert(dr_world_move(&w5, &g5, 0, 0) == DR_MOVE_HOME);   // 村庄格
+    assert(g5.res[DR_RES_ENERGY_CELL] == 5 && w5.carry_cells == 0);
+    assert(g5.res[DR_RES_GRENADE] == 2 && w5.carry_grenades == 0);
+    assert(g5.res[DR_RES_BOLAS] == 2 && w5.carry_bolas == 0);
+}
+
 int main(void) {
     test_gen();
     test_embark_and_supplies();
@@ -554,6 +685,7 @@ int main(void) {
     test_stealthy();
     test_city_cleared();
     test_scout_reveal();
+    test_m5_weapons();
     printf("test_dr_world: all passed\n");
     return 0;
 }

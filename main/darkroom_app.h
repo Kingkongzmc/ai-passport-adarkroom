@@ -18,6 +18,8 @@ void dr_debug_dump(void);       // 模拟器诊断:打印关键状态
 void dr_sweep_next(void);       // 模拟器:页面轮播(SIM_PAGE_SWEEP)
 void dr_debug_set_wild(uint8_t x, uint8_t y);  // 模拟器:注入远征态(SIM_WILD)
 void dr_debug_force_event(uint16_t idx);       // 模拟器:直达事件弹窗(SIM_EVENT)
+// 模拟器:星舰页注入(SIM_SHIP=exec,hull,thr,alloy)
+void dr_debug_set_ship(uint8_t exec, uint8_t hull, uint8_t thr, uint32_t alloy);
 
 #ifdef __cplusplus
 }

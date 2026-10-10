@@ -228,6 +228,63 @@ static void test_v4_migration(void) {
     assert(!dr_state_load(blob, n - 1, &out));
 }
 
+// v5 → v6(M5:能量元件/手雷/流星锤资源槽 + 星舰/周目尾插):
+// 前缀逐字段保留,新资源槽零填充,推进器按 BASE_THRUSTERS=1 初始化
+static void test_v5_migration(void) {
+    dr_game_t g;
+    dr_game_init(&g, 4242, 1000);
+    g.res[DR_RES_WOOD] = 77;
+    g.res[DR_RES_MEDICINE] = 9;
+    g.population = 5;
+    g.weapon_lv = 4;
+    g.armor_lv = 2;
+    g.thieves_lv = 2;
+    g.stolen_wood = 111;
+    g.stolen_fur = 222;
+    g.stolen_meat = 333;
+    g.flags = 0x5;
+    // v6 新字段塞脏值:迁移后必须归零(推进器例外,见下),证明零填充而非穿帮
+    g.res[DR_RES_ENERGY_CELL] = 99;
+    g.res[DR_RES_GRENADE] = 88;
+    g.res[DR_RES_BOLAS] = 77;
+    g.ship_hull = 9;
+    g.ship_thrusters = 9;
+    g.exec_state = 2;
+    g.won_this_run = 1;
+    g.legacy_res[DR_RES_WOOD] = 999;
+    g.legacy_perks = ~0u;
+    g.legacy_weapon_lv = 6;
+    g.legacy_armor_lv = 3;
+    g.legacy_pending = 1;
+    g.prestige_count = 4;
+
+    uint8_t blob[640];
+    size_t n = dr_state_pack_v5(&g, blob, sizeof(blob));
+    assert(n == sizeof(dr_save_hdr_t) + 528u);   // v5 体 = 528(自然对齐)
+    dr_game_t out;
+    assert(dr_state_load(blob, n, &out));
+    assert(out.saved_at_ts == 1000);
+    assert(out.res[DR_RES_WOOD] == 77 && out.res[DR_RES_MEDICINE] == 9);
+    assert(out.population == 5 && out.weapon_lv == 4 && out.armor_lv == 2);
+    assert(out.thieves_lv == 2);
+    assert(out.stolen_wood == 111 && out.stolen_fur == 222 &&
+           out.stolen_meat == 333);
+    assert((out.flags & 0x5) == 0x5);
+    // 新资源槽零填充(v5 档没有能量元件/手雷/流星锤)
+    assert(out.res[DR_RES_ENERGY_CELL] == 0 && out.res_total[DR_RES_ENERGY_CELL] == 0);
+    assert(out.res[DR_RES_GRENADE] == 0 && out.res[DR_RES_BOLAS] == 0);
+    // 星舰:hull 0,推进器按原版 BASE_THRUSTERS=1(不是 0,也不是脏值 9)
+    assert(out.ship_hull == 0 && out.ship_thrusters == 1);
+    assert(out.exec_state == 0 && out.won_this_run == 0);
+    // 周目继承段零填充
+    assert(out.legacy_res[DR_RES_WOOD] == 0 && out.legacy_perks == 0);
+    assert(out.legacy_weapon_lv == 0 && out.legacy_armor_lv == 0);
+    assert(out.legacy_pending == 0 && out.prestige_count == 0);
+
+    // 长度不符的 v5 镜像(截断)拒绝
+    assert(!dr_state_load(blob, n - 1, &out));
+}
+
 int main(void) {
     test_crc_and_rng();
     test_pack_roundtrip();
@@ -237,6 +294,7 @@ int main(void) {
     test_load_is_side_effect_free();
     test_v1_migration();
     test_v4_migration();
+    test_v5_migration();
     printf("test_dr_state: all passed\n");
     return 0;
 }

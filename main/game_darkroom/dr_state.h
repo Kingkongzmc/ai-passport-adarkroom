@@ -77,6 +77,18 @@ typedef struct {
     uint32_t stolen_wood;               // 被偷走的木材(吊死窃贼时全数追回)
     uint32_t stolen_fur;
     uint32_t stolen_meat;
+
+    // v6 尾插(M5 第四幕:星舰 + 结局 + 周目继承;数值口径 ship.js/prestige.js)
+    uint8_t  ship_hull;                 // 星舰船壳(初始 0;加固 1 异星合金/点)
+    uint8_t  ship_thrusters;            // 推进器(初始 1 BASE_THRUSTERS;升级 1 合金/个)
+    uint8_t  exec_state;                // 执行者:0=未遇 1=已和解(制造台解锁) 2=已击溃(同解锁)
+    uint8_t  won_this_run;              // 本周目已达成结局(prestige 结算只此一次)
+    uint32_t legacy_res[DR_RES_KIND_COUNT]; // 待继承资源(原版 previous.stores 折算后)
+    uint64_t legacy_perks;              // 待继承 perk 旗标位(DR_FLAG_PERK_* 子集)
+    uint8_t  legacy_weapon_lv;          // 继承武器/护甲(用户拍板:原版按件数折算,本作按阶继承)
+    uint8_t  legacy_armor_lv;
+    uint8_t  legacy_pending;            // 1=有遗产待下周目开局入账(入账后清零)
+    uint16_t prestige_count;            // 已通关次数(关于行"第 N 周目"= +1)
 } dr_game_t;
 
 #pragma pack(push, 1)
@@ -108,6 +120,7 @@ size_t dr_state_pack_v1(const dr_game_t *g, void *out, size_t outsz);
 size_t dr_state_pack_v2(const dr_game_t *g, void *out, size_t outsz);
 size_t dr_state_pack_v3(const dr_game_t *g, void *out, size_t outsz);
 size_t dr_state_pack_v4(const dr_game_t *g, void *out, size_t outsz);
+size_t dr_state_pack_v5(const dr_game_t *g, void *out, size_t outsz);
 
 // 离线结算(M2 起接产出表;M1 提供时间钳制口径):
 //   delta_s = now_ts - g->saved_at_ts

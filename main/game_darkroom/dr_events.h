@@ -61,6 +61,7 @@ typedef enum {
                           // (M6:原版加权 nextScene 分支的移植形态,先到先得)
     DR_EFF_THIEF_HANG,   // 吊死窃贼:停止偷窃,追回全部被偷物资(原版 global.js)
     DR_EFF_THIEF_SPARE,  // 放过窃贼:停止偷窃,得 stealthy Perk(原版)
+    DR_EFF_EXEC_SET,     // 执行者状态 = arg2(M5:1=和解 2=击溃;制造台解锁)
     DR_EFF_NONE = 0xFF,
 } dr_eff_op_t;
 
@@ -107,6 +108,9 @@ typedef enum {
 // 触发上下文:RNG 用游戏档内的确定性序列;now_ts 用于冷却判定。
 // events 为事件表,count 为条数(由 dr_events_data.c 提供 dr_events_table())。
 const dr_event_t *dr_events_table(uint16_t *count);
+// 按标题文案 id 反查事件下标(UI 手动触发链式事件用,如星舰执行者);
+// 未找到返回 0xFFFF。
+uint16_t dr_events_find(uint16_t text_id);
 
 // 会话内冷却与全局节拍由调用方持有的会话结构记账,主机可测。
 // next_ok_ts:全局节拍门——任何事件触发后,最早下一次触发时刻

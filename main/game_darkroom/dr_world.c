@@ -182,6 +182,7 @@ bool dr_world_embark(dr_world_t *w, dr_game_t *g) {
     memset(w->loot, 0, sizeof(w->loot));
     w->fight_enemy = DR_ENEMY_KIND_COUNT;
     w->fight_round = 0;
+    w->fight_stun = 0;
     w->steps_since_fight = 0;
     trip_food_moves = 0;
     g->in_wilderness = 1;
@@ -202,6 +203,9 @@ void dr_world_fail_trip(dr_world_t *w, dr_game_t *g) {
     w->fight_enemy = DR_ENEMY_KIND_COUNT;
     w->carry_medicine = 0;
     w->carry_bullets = 0;
+    w->carry_cells = 0;
+    w->carry_grenades = 0;
+    w->carry_bolas = 0;
     memset(w->loot, 0, sizeof(w->loot));
 }
 
@@ -209,13 +213,19 @@ static dr_move_result_t arrive_home(dr_world_t *w, dr_game_t *g) {
     if (w->visited_iron)    g->flags |= (uint64_t)1u << DR_FLAG_IRON_MINE;
     if (w->visited_coal)    g->flags |= (uint64_t)1u << DR_FLAG_COAL_MINE;
     if (w->visited_sulphur) g->flags |= (uint64_t)1u << DR_FLAG_SULPHUR_MINE;
-    // 背袋全量入库(原版 goHome:干肉/药/子弹/战利品;水不回)
+    // 背袋全量入库(原版 goHome:干肉/药/子弹/元件/手雷/流星锤/战利品;水不回)
     g->res[DR_RES_FOOD] += g->food;
     g->res_total[DR_RES_FOOD] += g->food;
     g->res[DR_RES_MEDICINE] += w->carry_medicine;
     g->res_total[DR_RES_MEDICINE] += w->carry_medicine;
     g->res[DR_RES_BULLETS] += w->carry_bullets;
     g->res_total[DR_RES_BULLETS] += w->carry_bullets;
+    g->res[DR_RES_ENERGY_CELL] += w->carry_cells;
+    g->res_total[DR_RES_ENERGY_CELL] += w->carry_cells;
+    g->res[DR_RES_GRENADE] += w->carry_grenades;
+    g->res_total[DR_RES_GRENADE] += w->carry_grenades;
+    g->res[DR_RES_BOLAS] += w->carry_bolas;
+    g->res_total[DR_RES_BOLAS] += w->carry_bolas;
     for (int i = 0; i < DR_RES_KIND_COUNT; i++) {
         if (w->loot[i]) {
             g->res[i] += w->loot[i];
@@ -228,6 +238,9 @@ static dr_move_result_t arrive_home(dr_world_t *w, dr_game_t *g) {
     g->in_wilderness = 0;
     w->carry_medicine = 0;
     w->carry_bullets = 0;
+    w->carry_cells = 0;
+    w->carry_grenades = 0;
+    w->carry_bolas = 0;
     return DR_MOVE_HOME;
 }
 
@@ -267,6 +280,7 @@ dr_move_result_t dr_world_move(dr_world_t *w, dr_game_t *g, int dx, int dy) {
                 w->fight_enemy = e;
                 w->fight_hp = k_enemies[e].hp;
                 w->fight_round = 0;
+                w->fight_stun = 0;
                 w->steps_since_fight = 0;
                 return DR_MOVE_FIGHT;
             }
@@ -328,26 +342,31 @@ const char *dr_enemy_name(uint8_t enemy) {
 }
 
 uint8_t dr_world_weapon_dmg(uint8_t weapon_lv) {
-    // 原版武器表:拳1/骨矛2/铁剑4/钢剑6/步枪5(耗弹)
-    static const uint8_t dmg[5] = { 1, 2, 4, 6, 5 };
-    return (weapon_lv < 5) ? dmg[weapon_lv] : 1;
+    // 原版武器表(world.js):拳1/骨矛2/铁剑4/钢剑6/步枪5(耗弹)/
+    // 刺刀8(近战)/激光步枪8(耗能量元件)
+    static const uint8_t dmg[7] = { 1, 2, 4, 6, 5, 8, 8 };
+    return (weapon_lv < 7) ? dmg[weapon_lv] : 1;
 }
 
 // ---- 背袋承重(原版 Path.Weight;单位 0.1) ----
-// 武器随行计重(原版 path.js:拳 0/骨矛 2/铁剑 3/钢剑·步枪 5;护甲为
-// 装备位不计重。2026-10-04 §3.7 补齐,此前武器零重量为漏实现)
-static const uint16_t k_weapon_weight[5] = { 0, 20, 30, 50, 50 };
+// 武器随行计重(原版 path.js:拳 0/骨矛 2/铁剑 3/钢剑·步枪·激光步枪 5/刺刀 1;
+// 护甲为装备位不计重。2026-10-04 §3.7 补齐,此前武器零重量为漏实现)
+static const uint16_t k_weapon_weight[7] = { 0, 20, 30, 50, 50, 10, 50 };
 
 uint16_t dr_world_bag_weight(const dr_game_t *g, const dr_world_t *w) {
-    uint64_t weight = (g->weapon_lv < 5) ? k_weapon_weight[g->weapon_lv] : 0u;
+    uint64_t weight = (g->weapon_lv < 7) ? k_weapon_weight[g->weapon_lv] : 0u;
     weight += (uint64_t)g->food * 10u + (uint64_t)w->carry_medicine * 10u +
-              (uint64_t)w->carry_bullets;
+              (uint64_t)w->carry_bullets + (uint64_t)w->carry_cells * 2u +
+              (uint64_t)w->carry_grenades * 10u + (uint64_t)w->carry_bolas * 5u;
     for (int i = 0; i < DR_RES_KIND_COUNT; i++) weight += (uint64_t)w->loot[i] * 10u;
     return (uint16_t)(weight > 0xFFFFu ? 0xFFFFu : weight);
 }
 
-uint16_t dr_world_carry_medicine(const dr_world_t *w) { return w->carry_medicine; }
+uint16_t dr_world_carry_medicine(const dr_world_t *w)  { return w->carry_medicine; }
 uint16_t dr_world_carry_bullets(const dr_world_t *w)  { return w->carry_bullets; }
+uint16_t dr_world_carry_cells(const dr_world_t *w)    { return w->carry_cells; }
+uint16_t dr_world_carry_grenades(const dr_world_t *w) { return w->carry_grenades; }
+uint16_t dr_world_carry_bolas(const dr_world_t *w)    { return w->carry_bolas; }
 
 bool dr_world_outfit_add(dr_world_t *w, dr_game_t *g, uint8_t res, int16_t delta) {
     if (delta == 0) return false;
@@ -360,6 +379,12 @@ bool dr_world_outfit_add(dr_world_t *w, dr_game_t *g, uint8_t res, int16_t delta
                                        carry = &w->carry_medicine; }
     else if (res == DR_RES_BULLETS)  { store = &g->res[DR_RES_BULLETS];
                                        carry = &w->carry_bullets; unit_w = 1; }
+    else if (res == DR_RES_ENERGY_CELL) { store = &g->res[DR_RES_ENERGY_CELL];
+                                       carry = &w->carry_cells; unit_w = 2; }
+    else if (res == DR_RES_GRENADE)  { store = &g->res[DR_RES_GRENADE];
+                                       carry = &w->carry_grenades; }
+    else if (res == DR_RES_BOLAS)    { store = &g->res[DR_RES_BOLAS];
+                                       carry = &w->carry_bolas; unit_w = 5; }
     else return false;
 
     if (delta > 0) {
@@ -434,6 +459,8 @@ static void enemy_turn(dr_world_t *w, dr_game_t *g, dr_rng_t *r,
                        dr_fight_result_t *out) {
     const dr_enemy_def_t *e = &k_enemies[w->fight_enemy];
     w->fight_round++;
+    // 流星锤眩晕:敌人停摆(回合计数照走,原版 stun 期间不反击)
+    if (w->fight_stun > 0) { w->fight_stun--; *out = DR_FIGHT_ENEMY_SKIP; return; }
     if (w->fight_round % e->delay != 0) { *out = DR_FIGHT_ENEMY_SKIP; return; }
     // 闪避 Perk:敌方命中 ×0.8(原版 enemyAttack toHit *= 0.8)
     uint16_t hit_pm = e->hit_pm;
@@ -465,6 +492,9 @@ static void fight_loot(dr_world_t *w, dr_game_t *g, dr_rng_t *r) {
     }
 }
 
+static dr_fight_result_t blow_landed(dr_world_t *w, dr_game_t *g, dr_rng_t *r,
+                                     uint8_t dmg);
+
 dr_fight_result_t dr_world_fight_attack(dr_world_t *w, dr_game_t *g) {
     if (!dr_world_fight_active(w)) return DR_FIGHT_NONE;
     dr_rng_t *r = fight_rng(g);
@@ -474,9 +504,13 @@ dr_fight_result_t dr_world_fight_attack(dr_world_t *w, dr_game_t *g) {
         if (w->carry_bullets > 0) w->carry_bullets--;
         else dmg = 1;
     }
-    // 蛮力 Perk:近战(骨矛/铁剑/钢剑)伤害 ×1.5 向下取整(原版 events.js
-    // weapon.type == 'melee';拳=unarmed、步枪=ranged 均不加成)
-    if (g->weapon_lv >= 1 && g->weapon_lv <= 3 &&
+    if (g->weapon_lv == 6) {                  // 激光步枪:耗 1 能量元件,无件退化为拳
+        if (w->carry_cells > 0) w->carry_cells--;
+        else dmg = 1;
+    }
+    // 蛮力 Perk:近战(骨矛/铁剑/钢剑/刺刀)伤害 ×1.5 向下取整(原版 events.js
+    // weapon.type == 'melee';拳=unarmed、步枪/激光步枪=ranged 均不加成)
+    if (((g->weapon_lv >= 1 && g->weapon_lv <= 3) || g->weapon_lv == 5) &&
         (g->flags & ((uint64_t)1u << DR_FLAG_PERK_BARBARIAN)))
         dmg = (uint8_t)(dmg + dmg / 2u);
     // 玩家命中 80%(原版 BASE_HIT_CHANCE);精准 Perk +10%(getHitChance)
@@ -487,6 +521,12 @@ dr_fight_result_t dr_world_fight_attack(dr_world_t *w, dr_game_t *g) {
         enemy_turn(w, g, r, &out);
         return out;
     }
+    return blow_landed(w, g, r, dmg);
+}
+
+// 玩家命中后的统一结算:扣血/致死(战利品+城市清剿)/否则敌方回合
+static dr_fight_result_t blow_landed(dr_world_t *w, dr_game_t *g, dr_rng_t *r,
+                                     uint8_t dmg) {
     if (w->fight_hp > dmg) {
         w->fight_hp -= dmg;
     } else {
@@ -503,6 +543,37 @@ dr_fight_result_t dr_world_fight_attack(dr_world_t *w, dr_game_t *g) {
     dr_fight_result_t out;
     enemy_turn(w, g, r, &out);
     return out;
+}
+
+// 手雷:15 伤(原版 grenade damage 15,冷却折入回合制)
+dr_fight_result_t dr_world_fight_grenade(dr_world_t *w, dr_game_t *g) {
+    if (!dr_world_fight_active(w) || w->carry_grenades == 0) return DR_FIGHT_NONE;
+    dr_rng_t *r = fight_rng(g);
+    w->carry_grenades--;
+    uint16_t hit_pm = (g->flags & ((uint64_t)1u << DR_FLAG_PERK_PRECISE))
+                          ? 900u : 800u;
+    if (!dr_rng_chance(r, hit_pm)) {
+        dr_fight_result_t out;
+        enemy_turn(w, g, r, &out);
+        return out;
+    }
+    return blow_landed(w, g, r, 15);
+}
+
+// 流星锤:命中则敌人停摆 2 回合(原版 bolas stun;未命中照常挨反击)
+dr_fight_result_t dr_world_fight_bolas(dr_world_t *w, dr_game_t *g) {
+    if (!dr_world_fight_active(w) || w->carry_bolas == 0) return DR_FIGHT_NONE;
+    dr_rng_t *r = fight_rng(g);
+    w->carry_bolas--;
+    uint16_t hit_pm = (g->flags & ((uint64_t)1u << DR_FLAG_PERK_PRECISE))
+                          ? 900u : 800u;
+    if (!dr_rng_chance(r, hit_pm)) {
+        dr_fight_result_t out;
+        enemy_turn(w, g, r, &out);
+        return out;
+    }
+    w->fight_stun = 2;
+    return DR_FIGHT_STUN;
 }
 
 dr_fight_result_t dr_world_fight_eat(dr_world_t *w, dr_game_t *g) {
@@ -569,6 +640,7 @@ static void loc_fight(dr_world_t *w, dr_game_t *g, uint8_t enemy) {
     w->fight_enemy = enemy;
     w->fight_hp = k_enemies[enemy].hp;
     w->fight_round = 0;
+    w->fight_stun = 0;
     // 城市搜出来的战斗,胜利即清剿完成(军队突袭之门,原版 cityCleared)
     w->fight_from_city = (w->location == DR_WT_CITY);
 }

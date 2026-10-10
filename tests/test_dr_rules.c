@@ -371,6 +371,17 @@ static void test_trade(void) {
     assert((g.flags & ((uint64_t)1u << DR_FLAG_COMPASS)) != 0);
     g.res[DR_RES_FUR] = 400; g.res[DR_RES_SCALES] = 20; g.res[DR_RES_TEETH] = 10;
     assert(!dr_rules_trade_buy(&g, DR_TRADE_COMPASS));   // 已购
+
+    // M5 新档货(原版 TradeGoods 牌价):能量元件 10鳞+10牙;异星合金 1500毛+750鳞+300牙
+    g.res[DR_RES_SCALES] = 10; g.res[DR_RES_TEETH] = 10;
+    assert(dr_rules_trade_buy(&g, DR_TRADE_ENERGY_CELL));
+    assert(g.res[DR_RES_ENERGY_CELL] == 1 && g.res_total[DR_RES_ENERGY_CELL] == 1);
+    assert(g.res[DR_RES_SCALES] == 0 && g.res[DR_RES_TEETH] == 0);
+    g.res[DR_RES_FUR] = 1500; g.res[DR_RES_SCALES] = 750; g.res[DR_RES_TEETH] = 300;
+    assert(dr_rules_trade_buy(&g, DR_TRADE_ALIEN));
+    assert(g.res[DR_RES_ALIEN] == 1 && g.res_total[DR_RES_ALIEN] == 1);
+    assert(g.res[DR_RES_FUR] == 0 && g.res[DR_RES_SCALES] == 0);
+    assert(!dr_rules_trade_buy(&g, DR_TRADE_ALIEN));     // 货款不够
 }
 
 // ---- 离线补算(设备适配):熄火 + 收入逐 tick + 陷阱按周期 ----
@@ -549,6 +560,138 @@ static void test_thieves_offline(void) {
     assert(g.stolen_wood == 100);
 }
 
+// ---- 制造台(M5:执行者了结后解锁;武器按阶,消耗品可重造) ----
+static void test_fab(void) {
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    // 未解锁:执行者未遇(exec_state==0)一律不可造
+    g.res[DR_RES_WOOD] = 500;
+    g.res[DR_RES_IRON] = 10;
+    g.res[DR_RES_ENERGY_CELL] = 5;
+    assert(!dr_fab_unlocked(&g));
+    assert(!dr_fab_make(&g, DR_FAB_BAYONET));
+    // 执行者了结(和解或击溃)→ 解锁
+    g.exec_state = 1;
+    assert(dr_fab_unlocked(&g));
+
+    // 刺刀:1 铁+50 木 → 武器 5
+    assert(dr_fab_ready(&g, DR_FAB_BAYONET));
+    assert(dr_fab_make(&g, DR_FAB_BAYONET));
+    assert(g.weapon_lv == 5);
+    assert(g.res[DR_RES_WOOD] == 450 && g.res[DR_RES_IRON] == 9);
+    assert(dr_fab_owned(&g, DR_FAB_BAYONET));
+    assert(!dr_fab_make(&g, DR_FAB_BAYONET));   // 已拥有,不可重造
+
+    // 激光步枪:1 能量元件+50 木 → 武器 6(覆盖刺刀)
+    assert(dr_fab_make(&g, DR_FAB_LASER_RIFLE));
+    assert(g.weapon_lv == 6);
+    assert(g.res[DR_RES_ENERGY_CELL] == 4);
+    assert(!dr_fab_ready(&g, DR_FAB_LASER_RIFLE));
+
+    // 手雷:100 鳞+50 牙 → +1 消耗品,可重复
+    assert(!dr_fab_make(&g, DR_FAB_GRENADE));   // 材料不够
+    g.res[DR_RES_SCALES] = 200;
+    g.res[DR_RES_TEETH] = 100;
+    assert(dr_fab_make(&g, DR_FAB_GRENADE));
+    assert(g.res[DR_RES_GRENADE] == 1 && g.res_total[DR_RES_GRENADE] == 1);
+    assert(dr_fab_make(&g, DR_FAB_GRENADE));    // 消耗品可重造
+    assert(g.res[DR_RES_GRENADE] == 2);
+    assert(g.res[DR_RES_SCALES] == 0 && g.res[DR_RES_TEETH] == 0);
+
+    // 流星锤:10 牙 → +1
+    g.res[DR_RES_TEETH] = 10;
+    assert(dr_fab_make(&g, DR_FAB_BOLAS));
+    assert(g.res[DR_RES_BOLAS] == 1 && g.res_total[DR_RES_BOLAS] == 1);
+    assert(g.res[DR_RES_TEETH] == 0);
+    assert(!dr_fab_ready(&g, DR_FAB_BOLAS));
+
+    // 材料缺口查询
+    assert(dr_fab_need(&g, DR_FAB_GRENADE, DR_RES_SCALES) == 100);
+    assert(dr_fab_need(&g, DR_FAB_BAYONET, DR_RES_IRON) == 1);
+}
+
+// ---- 星舰(原版 ship.js:1 合金/船壳点,1 合金/推进器,hull>0 才可升空) ----
+static void test_ship(void) {
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    // 初值(原版 BASE_HULL 0 / BASE_THRUSTERS 1)
+    assert(g.ship_hull == 0 && g.ship_thrusters == 1);
+    assert(!dr_ship_can_liftoff(&g));
+    // 无合金不可加固/升级
+    assert(!dr_ship_reinforce(&g));
+    assert(!dr_ship_upgrade(&g));
+    g.res[DR_RES_ALIEN] = 3;
+    assert(dr_ship_reinforce(&g));
+    assert(g.ship_hull == 1 && g.res[DR_RES_ALIEN] == 2);
+    assert(dr_ship_can_liftoff(&g));
+    assert(dr_ship_upgrade(&g));
+    assert(g.ship_thrusters == 2 && g.res[DR_RES_ALIEN] == 1);
+    // 磨难段:推进器 <4 每缺 1 加 1 段(4 及以上直达)
+    assert(dr_ship_drift_segments(&g) == 2);
+    g.ship_thrusters = 4;
+    assert(dr_ship_drift_segments(&g) == 0);
+    g.ship_thrusters = 1;
+    assert(dr_ship_drift_segments(&g) == 3);
+    // 合金耗尽后不可再升
+    assert(dr_ship_upgrade(&g));   // 最后 1 合金
+    assert(g.res[DR_RES_ALIEN] == 0);
+    assert(!dr_ship_upgrade(&g));
+}
+
+// ---- 周目继承(原版 prestige.js storesMap 折算 + 用户拍板武器/护甲/Perk 继承) ----
+static void test_prestige(void) {
+    dr_game_t g;
+    dr_game_init(&g, 1, 1000);
+    g.res[DR_RES_WOOD] = 900;
+    g.res[DR_RES_FUR] = 180;
+    g.res[DR_RES_IRON] = 45;
+    g.res[DR_RES_FOOD] = 30;
+    g.res[DR_RES_BULLETS] = 100;
+    g.res[DR_RES_ENERGY_CELL] = 20;
+    g.res[DR_RES_GRENADE] = 10;
+    g.res[DR_RES_ALIEN] = 7;        // 不在 storesMap,不继承
+    g.res[DR_RES_MEDICINE] = 5;     // 同上
+    g.weapon_lv = 6;
+    g.armor_lv = 3;
+    g.flags |= (uint64_t)1u << DR_FLAG_PERK_EVASIVE |
+               (uint64_t)1u << DR_FLAG_PERK_BARBARIAN |
+               (uint64_t)1u << DR_FLAG_FOREST;
+    dr_rng_t rng;
+    dr_rng_seed(&rng, 42);
+    dr_prestige_save(&g, &rng);
+    assert(g.won_this_run == 1 && g.prestige_count == 1);
+    assert(g.legacy_pending == 1);
+    // 'g' 类除数 1..9:折算后 ∈ [res/9, res]
+    assert(g.legacy_res[DR_RES_WOOD] >= 100 && g.legacy_res[DR_RES_WOOD] <= 900);
+    assert(g.legacy_res[DR_RES_FUR] >= 20 && g.legacy_res[DR_RES_FUR] <= 180);
+    assert(g.legacy_res[DR_RES_IRON] >= 5 && g.legacy_res[DR_RES_IRON] <= 45);
+    // 'a' 类除数 (1..10)^2 ≤ 100:折损极重
+    assert(g.legacy_res[DR_RES_BULLETS] <= 100 &&
+           g.legacy_res[DR_RES_BULLETS] >= 1);
+    assert(g.legacy_res[DR_RES_GRENADE] <= 10);
+    // 不在 storesMap 的一律 0
+    assert(g.legacy_res[DR_RES_ALIEN] == 0 && g.legacy_res[DR_RES_MEDICINE] == 0);
+    // 武器/护甲/Perk 照收(非 Perk 旗标不收)
+    assert(g.legacy_weapon_lv == 6 && g.legacy_armor_lv == 3);
+    assert(g.legacy_perks & ((uint64_t)1u << DR_FLAG_PERK_EVASIVE));
+    assert(g.legacy_perks & ((uint64_t)1u << DR_FLAG_PERK_BARBARIAN));
+    assert(!(g.legacy_perks & ((uint64_t)1u << DR_FLAG_FOREST)));
+
+    uint32_t leg_wood = g.legacy_res[DR_RES_WOOD];
+    uint32_t leg_bul = g.legacy_res[DR_RES_BULLETS];
+    dr_prestige_new_game(&g, 0xBEEF, 2000);
+    // 新档:遗产入账(起始 15 木 + 折算木),装备与 Perk 在,通关次数留
+    assert(g.res[DR_RES_WOOD] == 15 + leg_wood);
+    assert(g.res[DR_RES_BULLETS] == leg_bul);
+    assert(g.weapon_lv == 6 && g.armor_lv == 3);
+    assert((g.flags & ((uint64_t)1u << DR_FLAG_PERK_EVASIVE)) != 0);
+    assert(g.prestige_count == 1);
+    assert(g.legacy_pending == 0 && g.legacy_res[DR_RES_WOOD] == 0);
+    assert(g.won_this_run == 0);            // 新周目可再结算
+    assert(g.map_seed == (uint16_t)(0xBEEF >> 16));   // 换新图
+    assert(g.population == 0 && g.building_lv[DR_BLD_HUT] == 0);  // 村庄归零
+}
+
 int main(void) {
     test_building_costs();
     test_build_gates();
@@ -567,6 +710,9 @@ int main(void) {
     test_craft();
     test_thieves();
     test_thieves_offline();
+    test_fab();
+    test_ship();
+    test_prestige();
     printf("test_dr_rules: all passed\n");
     return 0;
 }

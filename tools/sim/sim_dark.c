@@ -235,6 +235,14 @@ int main(int argc, char **argv) {
     // 等不到低频事件;配合 SIM_PERSIST 造档实测选择链)
     char *sim_ev = getenv("SIM_EVENT");
     if (sim_ev) dr_debug_force_event((uint16_t)atoi(sim_ev));
+    // SIM_SHIP=<exec>,<hull>,<thr>,<alloy>:星舰页注入(页签旗标+船态),
+    // 供星舰页/制造台/升空序列截图与按键实测(M5)
+    char *sim_ship = getenv("SIM_SHIP");
+    if (sim_ship) {
+        unsigned ex = 1, hu = 2, th = 2, al = 5;
+        sscanf(sim_ship, "%u,%u,%u,%u", &ex, &hu, &th, &al);
+        dr_debug_set_ship((uint8_t)ex, (uint8_t)hu, (uint8_t)th, al);
+    }
 
     for (int f = 0; f < frames; f++) {
         for (int k = 0; k < s_key_count; k++)

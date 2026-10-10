@@ -46,9 +46,9 @@ enum {
     // 神秘的流浪者(The Mysterious Wanderer:木/毛赌局)
     DR_T_EV_WAND_W, DR_T_EV_WAND_BACK_W, DR_T_EV_WAND_GONE,
     DR_T_EV_WAND_F, DR_T_EV_WAND_BACK_F,
-    // 病人(The Sick Man:药换异金/鳞)
+    // 病人(The Sick Man:药换异金/能量元件/鳞)
     DR_T_EV_SICKMAN, DR_T_EV_SICKMAN_ALLOY, DR_T_EV_SICKMAN_SC,
-    DR_T_EV_SICKMAN_NOTHING,
+    DR_T_EV_SICKMAN_NOTHING, DR_T_EV_SICKMAN_CELL,
     // 毁坏的陷阱(A Ruined Trap:损半陷阱,追踪赌战利品)
     DR_T_EV_TRAPS, DR_T_EV_TRAPS_C0, DR_T_EV_TRAPS_C1,
     DR_T_EV_TRAPS_CATCH, DR_T_EV_TRAPS_LOST,
@@ -76,6 +76,10 @@ enum {
     DR_T_EV_MASTER, DR_T_EV_MASTER_AGREE, DR_T_EV_MASTER_ROOM,
     DR_T_EV_MASTER_EVASION, DR_T_EV_MASTER_PRECISION, DR_T_EV_MASTER_FORCE,
     DR_T_EV_MASTER_NOTHING,
+
+    // ---- M5 第四幕 ----
+    // 执行者(The Executioner:星舰守卫,给合金和解/拒绝开战)
+    DR_T_EV_EXEC, DR_T_EV_EXEC_GIVE, DR_T_EV_EXEC_REFUSE, DR_T_EV_EXEC_PEACE,
 };
 
 const char *dr_text(uint16_t id);

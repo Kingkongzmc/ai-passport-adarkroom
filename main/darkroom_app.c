@@ -77,6 +77,7 @@ typedef struct { bsp_btn_t btn; bsp_btn_ev_t ev; } key_event_t;
 typedef enum {
     PG_TITLE = 0, PG_HOME, PG_BUILD, PG_VILLAGE, PG_MAP,    PG_RUIN, PG_COMBAT, PG_TRADE, PG_SETTINGS,
     PG_EVENT, PG_CONFIRM, PG_CRAFT,
+    PG_SHIP, PG_FAB, PG_LIFTOFF, PG_ENDING,   // M5 第四幕
 } page_t;
 
 // ---- 状态 ----
@@ -84,8 +85,8 @@ static struct {
     uint32_t boot_ms;          // 开机防抖基准
     uint32_t last_render_ms;   // 渲染静默期基准
     volatile bool save_pending;
-    uint8_t confirm_from;      // 确认页来源(0=设置重开 1=贸易全卖)
-    int8_t nav_focus;          // 主页导航焦点(-1=动作区,0..3=tab)
+    uint8_t confirm_from;      // 确认页来源(0=设置重开 1=贸易全卖 2=升空首飞警告)
+    int8_t nav_focus;          // 主页导航焦点(-1=动作区,0..4=tab)
     int8_t village_adj;        // 村庄调节模式:在调的职业(-1=未调节)
     uint8_t job_scroll;        // 村庄职业区滚动偏移(窗口 5 行)
     uint8_t craft_scroll;      // 制造页滚动偏移(窗口 8 行,14 项装不下)
@@ -97,6 +98,10 @@ static struct {
     bool prev_stoke_active;    // 主页添柴冷却条活动态(结束瞬间也要重绘一次)
     uint32_t autosave_ms;      // 周期存档基准(挂机产出也落盘,断电回滚≤1分钟)
     uint32_t embark_cd_ms;     // 出发冷却到期时刻(死亡后 120s,原版口径)
+    uint32_t liftoff_cd_ms;    // 升空冷却到期时刻(120s,原版 ship.js)
+    uint8_t lift_seg;          // 升空叙事:当前段号(0=起飞)
+    uint8_t lift_total;        // 升空叙事:总段数(8 固定 + 磨难段)
+    int8_t fight_return;       // 战斗结束回页(默认 PG_MAP;执行者= PG_SHIP)
     int8_t outfit_adj;         // 出发整备:正在调配的物资(-1=无)
     bool screen_off;           // 熄屏态(背光 0,任意键唤醒并吞键,DESIGN §8.1)
     uint32_t last_input_ms;    // 最近一次真实按键(自动熄屏计时基准)
@@ -116,7 +121,7 @@ static struct {
 // ---- UI 对象 ----
 static lv_obj_t *s_scr, *s_panel, *s_content;
 static lv_obj_t *s_topbar, *s_batt;
-static lv_obj_t *s_tabs[4], *s_tablbl[4];
+static lv_obj_t *s_tabs[5], *s_tablbl[5];   // M5:第 4 页签=星舰(原版 An Old Starship)
 static lv_obj_t *s_cells[8];
 static lv_obj_t *s_loglines[LOG_VIS];
 static lv_obj_t *s_hint;
@@ -236,6 +241,7 @@ static const char *bld_short(int id) {
 
 // 村庄页签门:森林剧情解锁(原版 unlockForest)
 static bool forest_open(void);
+static bool ship_open(void);                // 星舰页签门(DR_FLAG_SHIP_OPEN)
 static bool build_affordable(uint8_t id);   // 建造行足额可付判定
 static bool trade_affordable(uint8_t item); // 贸易行支付能力判定(灰显同源)
 static bool nav_tab_enabled(int i);         // 页签启用表(荒野门)
@@ -301,6 +307,16 @@ static void set_dbody(const char *text) {
     lv_label_set_text(s_dbody, wrapped);
 }
 
+static lv_obj_t *s_story;              // 叙事页正文标签(升空/结局;M5)
+
+// 叙事页正文:198px 内容区,32 半角格折行(与弹窗同款预折行路径)
+static void set_story(const char *text) {
+    static char wrapped[320];
+    wrap_cjk(wrapped, sizeof(wrapped), text, 32);
+    lv_label_set_text(s_story, wrapped);
+    lv_obj_clear_flag(s_story, LV_OBJ_FLAG_HIDDEN);
+}
+
 // ===================================================================
 // build_ui:一次性创建全部对象(含隐藏),页面渲染只改属性与可见性
 // ===================================================================
@@ -349,12 +365,12 @@ static void build_ui(void) {
     lv_obj_set_style_text_align(s_batt, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(s_batt, "--%");
 
-    // 场景导航栏 4×47×20 @ y=24,文字 + 底部指示线
-    static const char *tab_names[4] = {"小屋", "村庄", "荒野", "≡"};
-    for (int i = 0; i < 4; i++) {
+    // 场景导航栏 5×38×20 @ y=24(步进 40;M5 星舰页签),文字 + 底部指示线
+    static const char *tab_names[5] = {"小屋", "村庄", "荒野", "星舰", "≡"};
+    for (int i = 0; i < 5; i++) {
         s_tabs[i] = lv_obj_create(s_content);
-        lv_obj_set_pos(s_tabs[i], i * 50, 24);
-        lv_obj_set_size(s_tabs[i], 47, 20);
+        lv_obj_set_pos(s_tabs[i], i * 40, 24);
+        lv_obj_set_size(s_tabs[i], 38, 20);
         lv_obj_set_style_bg_opa(s_tabs[i], LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(s_tabs[i], 0, 0);
         lv_obj_set_style_border_side(s_tabs[i], LV_BORDER_SIDE_BOTTOM, 0);
@@ -491,6 +507,11 @@ static void build_ui(void) {
                            2 + ARROW_W12, 1, 160 - ARROW_W12 - 4, 20);
     }
 
+    // 叙事页正文(升空/结局共用;M5):整页仅此一个长文标签,各页渲染时全量重写
+    s_story = label_new(s_content, &dr_font_12, lv_color_hex(COL_TEXT),
+                        0, 48, 198, 170);
+    lv_obj_add_flag(s_story, LV_OBJ_FLAG_HIDDEN);
+
     // 标题页三件套(独立对象;组块中心 ~139 垂直居中)
     s_t_big = label_new(s_content, &dr_font_24, lv_color_hex(COL_GOLD), 0, 88, 200, 30);
     lv_obj_set_style_text_align(s_t_big, LV_TEXT_ALIGN_CENTER, 0);
@@ -604,11 +625,13 @@ static void render_topbar(const char *title) {
 static void render_tabs(int active, bool village_ok, bool wild_ok, int nav) {
     // 第二页签名随定居进度变化(原版:森林 → 村庄)
     lv_label_set_text(s_tablbl[1], outside_name());
-    for (int i = 0; i < 4; i++) {
+    bool ship_ok = nav_tab_enabled(3);
+    for (int i = 0; i < 5; i++) {
         lv_obj_clear_flag(s_tabs[i], LV_OBJ_FLAG_HIDDEN);
         bool on = (i == active);
         bool cur = (i == nav);
-        bool lock = (i == 1 && !village_ok) || (i == 2 && !wild_ok);
+        bool lock = (i == 1 && !village_ok) || (i == 2 && !wild_ok) ||
+                    (i == 3 && !ship_ok);
         lv_obj_set_style_text_color(s_tablbl[i],
             lv_color_hex(lock ? COL_LOCK : (on || cur) ? COL_GOLD : COL_DIM), 0);
         lv_obj_set_style_border_color(s_tabs[i],
@@ -739,7 +762,7 @@ static void hide_rows(void) {
 static void clear_scene(void) {
     hide_acts();
     hide_rows();
-    for (int i = 0; i < 4; i++) lv_obj_add_flag(s_tabs[i], LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < 5; i++) lv_obj_add_flag(s_tabs[i], LV_OBJ_FLAG_HIDDEN);
     for (int i = 0; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
     for (int i = 0; i < LOG_VIS; i++) lv_obj_add_flag(s_loglines[i], LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
@@ -748,6 +771,7 @@ static void clear_scene(void) {
     lv_obj_add_flag(s_t_big, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_t_sub, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_t_ok, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_story, LV_OBJ_FLAG_HIDDEN);
     for (int i = 0; i < MAP_CELLS; i++) lv_obj_add_flag(s_map[i], LV_OBJ_FLAG_HIDDEN);
     for (int i = 0; i < LEG_KINDS; i++) {
         lv_obj_add_flag(s_legchip[i], LV_OBJ_FLAG_HIDDEN);
@@ -1154,8 +1178,9 @@ static const char *map_tile_name(uint8_t t) {
 }
 
 static const char *weapon_name(uint8_t lv) {
-    static const char *n[5] = { "拳", "骨矛", "铁剑", "钢剑", "步枪" };
-    return (lv < 5) ? n[lv] : n[0];
+    static const char *n[7] = { "拳", "骨矛", "铁剑", "钢剑", "步枪",
+                                "刺刀", "激光步枪" };
+    return (lv < 7) ? n[lv] : n[0];
 }
 
 static const char *armor_name(uint8_t lv) {
@@ -1185,26 +1210,31 @@ static void render_map(void) {
         char v[24];
         char cbuf[8];   // 库存量紧凑化(可超 5 位)
         bool adj = (s.outfit_adj >= 0);
-        dr_fmt_compact(cbuf, sizeof(cbuf), s.game.res[DR_RES_FOOD]);
-        snprintf(v, sizeof(v), "库%s 带%u", cbuf, s.game.food);
-        set_row(0, 52, "干肉", v, s.focus == 0, false);
-        dr_fmt_compact(cbuf, sizeof(cbuf), s.game.res[DR_RES_MEDICINE]);
-        snprintf(v, sizeof(v), "库%s 带%u",
-                 cbuf, dr_world_carry_medicine(&s_world));
-        set_row(1, 78, "药", v, s.focus == 1,
-                s.game.res[DR_RES_MEDICINE] == 0 &&
-                    dr_world_carry_medicine(&s_world) == 0);
-        dr_fmt_compact(cbuf, sizeof(cbuf), s.game.res[DR_RES_BULLETS]);
-        snprintf(v, sizeof(v), "库%s 带%u",
-                 cbuf, dr_world_carry_bullets(&s_world));
-        set_row(2, 104, "子弹", v, s.focus == 2,
-                s.game.res[DR_RES_BULLETS] == 0 &&
-                    dr_world_carry_bullets(&s_world) == 0);
-        // 只读装备行(填中段空白,出发前一目了然;不可聚焦)
-        set_row(3, 130, "武器", weapon_name(s.game.weapon_lv), false, true);
+        // 携带行(库→带):干肉/药/子弹/元件/手雷/流星锤(M5 扩 3→6 行,行距 20)
+        static const struct {
+            uint8_t res; const char *name; uint16_t (*carry)(const dr_world_t *);
+        } k_outfit[6] = {
+            { DR_RES_FOOD, "干肉", NULL },
+            { DR_RES_MEDICINE, "药", dr_world_carry_medicine },
+            { DR_RES_BULLETS, "子弹", dr_world_carry_bullets },
+            { DR_RES_ENERGY_CELL, "元件", dr_world_carry_cells },
+            { DR_RES_GRENADE, "手雷", dr_world_carry_grenades },
+            { DR_RES_BOLAS, "流星锤", dr_world_carry_bolas },
+        };
+        for (int i = 0; i < 6; i++) {
+            uint16_t c = k_outfit[i].carry ? k_outfit[i].carry(&s_world)
+                                           : s.game.food;
+            dr_fmt_compact(cbuf, sizeof(cbuf), s.game.res[k_outfit[i].res]);
+            snprintf(v, sizeof(v), "库%s 带%u", cbuf, c);
+            bool none = (s.game.res[k_outfit[i].res] == 0 && c == 0);
+            set_row(i, 52 + i * 20, k_outfit[i].name, v, s.focus == i,
+                    i != 0 && none);
+        }
+        // 只读装备行(出发前一目了然;不可聚焦)
+        set_row(6, 172, "武器", weapon_name(s.game.weapon_lv), false, true);
         snprintf(v, sizeof(v), "%s HP%u", armor_name(s.game.armor_lv),
                  dr_world_health_cap(&s.game));
-        set_row(4, 156, "护甲", v, false, true);
+        set_row(7, 192, "护甲", v, false, true);
         if ((int32_t)(now_ms - s.embark_cd_ms) < 0)
             snprintf(v, sizeof(v), "%lds",
                      (long)((s.embark_cd_ms - now_ms + 999) / 1000));
@@ -1212,19 +1242,19 @@ static void render_map(void) {
             snprintf(v, sizeof(v), "就绪");
         // 冷却中也置灰(仍可聚焦,确定弹"歇一歇"提示)——只按 food 置灰会让
         // 冷却行看似正常却选不中,像死键(真机反馈 2026-10-05)
-        set_row(5, 182, "出发远征", v, s.focus == 5,
+        set_row(8, 212, "出发远征", v, s.focus == 8,
                 s.game.food == 0 ||
                     (int32_t)(now_ms - s.embark_cd_ms) < 0);
-        set_row(6, 208, "返回", "", s.focus == 6, false);
-        for (int i = 7; i < LIST_ROWS; i++) lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
+        set_row(9, 232, "返回", "", s.focus == 9, false);
+        for (int i = 10; i < LIST_ROWS; i++) lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
         lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_pos(s_hint, 0, 238);
+        lv_obj_set_pos(s_hint, 0, 256);
         if (adj)
             lv_label_set_text(s_hint, "上下调整 长按=5/完成 确定下一项");
         else if (s.game.food == 0)
             lv_label_set_text(s_hint, "整备干肉后才能出发(库→带)");
         else
-            lv_label_set_text(s_hint, "干肉/药各占1,子弹10发占1");
+            lv_label_set_text(s_hint, "承重:肉药雷1 锤0.5 元0.2 弹0.1");
         return;
     }
 
@@ -1364,21 +1394,45 @@ static void render_combat(void) {
     }
     for (int i = 3; i < LOG_VIS; i++)
         lv_obj_add_flag(s_loglines[i], LV_OBJ_FLAG_HIDDEN);
+    // 行序:攻击/[手雷]/[流星锤]/吃干肉/用药/逃跑——消耗品行仅携带时出现
+    // (复用列表行,不增常驻对象;动作行与列表行混排同款金箭头焦点)
     char a[24];
+    int rows = 0;
     snprintf(a, sizeof(a), "攻击(%s)", weapon_name(s.game.weapon_lv));
-    set_act(&s_acts[0], a, s.focus == 0, 0);
-    snprintf(a, sizeof(a), "吃干肉(余%u)", s.game.food);
-    set_act(&s_acts[1], a, s.focus == 1, 0);
-    snprintf(a, sizeof(a), "用药(余%u)", dr_world_carry_medicine(&s_world));
-    set_act(&s_acts[2], a, s.focus == 2, 0);
-    set_act(&s_acts[3], "逃跑", s.focus == 3, 0);
-    for (int i = 0; i < 4; i++) {
-        lv_obj_set_pos(s_acts[i].row, 0, 168 + i * 22);
-        lv_obj_clear_flag(s_acts[i].row, LV_OBJ_FLAG_HIDDEN);
+    set_act(&s_acts[0], a, s.focus == rows, 0);
+    lv_obj_set_pos(s_acts[0].row, 0, 150 + rows * 20);
+    lv_obj_clear_flag(s_acts[0].row, LV_OBJ_FLAG_HIDDEN);
+    rows++;
+    char v[12];
+    if (dr_world_carry_grenades(&s_world) > 0) {
+        snprintf(v, sizeof(v), "余%u", dr_world_carry_grenades(&s_world));
+        set_row(0, 150 + rows * 20, "手雷", v, s.focus == rows, false);
+        rows++;
     }
-    lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(s_hint, 0, 262);   // 旧 y270 底边越界被裁 1/3(I10)
-    lv_label_set_text(s_hint, "命中80%;敌按攻击间隔反击");
+    if (dr_world_carry_bolas(&s_world) > 0) {
+        snprintf(v, sizeof(v), "余%u", dr_world_carry_bolas(&s_world));
+        set_row(1, 150 + rows * 20, "流星锤", v, s.focus == rows, false);
+        rows++;
+    }
+    snprintf(a, sizeof(a), "吃干肉(余%u)", s.game.food);
+    set_act(&s_acts[1], a, s.focus == rows, 0);
+    lv_obj_set_pos(s_acts[1].row, 0, 150 + rows * 20);
+    lv_obj_clear_flag(s_acts[1].row, LV_OBJ_FLAG_HIDDEN);
+    rows++;
+    snprintf(a, sizeof(a), "用药(余%u)", dr_world_carry_medicine(&s_world));
+    set_act(&s_acts[2], a, s.focus == rows, 0);
+    lv_obj_set_pos(s_acts[2].row, 0, 150 + rows * 20);
+    lv_obj_clear_flag(s_acts[2].row, LV_OBJ_FLAG_HIDDEN);
+    rows++;
+    set_act(&s_acts[3], "逃跑", s.focus == rows, 0);
+    lv_obj_set_pos(s_acts[3].row, 0, 150 + rows * 20);
+    lv_obj_clear_flag(s_acts[3].row, LV_OBJ_FLAG_HIDDEN);
+    rows++;
+    if (rows <= 4) {   // 有消耗品行时提示行让位(行底已贴近内容区下缘)
+        lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_pos(s_hint, 0, 262);
+        lv_label_set_text(s_hint, "命中80%;敌按攻击间隔反击");
+    }
 }
 
 static void render_trade(void) {
@@ -1397,32 +1451,39 @@ static void render_trade(void) {
     bool compass = (s.game.flags & ((uint64_t)1u << DR_FLAG_COMPASS)) != 0;
     char v[28];
     if (post) {
+        // 10 档货(M5 +元件/合金):行距 19,返回 236,提示 258
         snprintf(v, sizeof(v), "%u毛", 150u);  set_row(0, 46, "买 鳞", v, s.focus == 0, !trade_affordable(0));
-        snprintf(v, sizeof(v), "%u毛", 300u);  set_row(1, 67, "买 牙", v, s.focus == 1, !trade_affordable(1));
-        snprintf(v, sizeof(v), "%u毛%u鳞", 150u, 50u); set_row(2, 88, "买 铁", v, s.focus == 2, !trade_affordable(2));
-        snprintf(v, sizeof(v), "%u毛%u牙", 200u, 50u); set_row(3, 109, "买 煤", v, s.focus == 3, !trade_affordable(3));
-        snprintf(v, sizeof(v), "%u毛%u鳞%u牙", 300u, 50u, 50u); set_row(4, 130, "买 钢", v, s.focus == 4, !trade_affordable(4));
-        snprintf(v, sizeof(v), "%u鳞", 10u);   set_row(5, 151, "买 子弹", v, s.focus == 5, !trade_affordable(5));
-        snprintf(v, sizeof(v), "%u鳞%u牙", 50u, 30u); set_row(6, 172, "买 药", v, s.focus == 6, !trade_affordable(6));
+        snprintf(v, sizeof(v), "%u毛", 300u);  set_row(1, 65, "买 牙", v, s.focus == 1, !trade_affordable(1));
+        snprintf(v, sizeof(v), "%u毛%u鳞", 150u, 50u); set_row(2, 84, "买 铁", v, s.focus == 2, !trade_affordable(2));
+        snprintf(v, sizeof(v), "%u毛%u牙", 200u, 50u); set_row(3, 103, "买 煤", v, s.focus == 3, !trade_affordable(3));
+        snprintf(v, sizeof(v), "%u毛%u鳞%u牙", 300u, 50u, 50u); set_row(4, 122, "买 钢", v, s.focus == 4, !trade_affordable(4));
+        snprintf(v, sizeof(v), "%u鳞", 10u);   set_row(5, 141, "买 子弹", v, s.focus == 5, !trade_affordable(5));
+        snprintf(v, sizeof(v), "%u鳞%u牙", 50u, 30u); set_row(6, 160, "买 药", v, s.focus == 6, !trade_affordable(6));
         if (compass) snprintf(v, sizeof(v), "已购");
         else         snprintf(v, sizeof(v), "%u毛%u鳞%u牙", 400u, 20u, 10u);
-        set_row(7, 193, "买 罗盘", v, s.focus == 7, !trade_affordable(7));
-        set_row(8, 215, "返回", "", s.focus == 8, false);
+        set_row(7, 179, "买 罗盘", v, s.focus == 7, !trade_affordable(7));
+        snprintf(v, sizeof(v), "%u鳞%u牙", 10u, 10u); set_row(8, 198, "买 元件", v, s.focus == 8, !trade_affordable(8));
+        snprintf(v, sizeof(v), "1500毛750鳞300牙");
+        set_row(9, 217, "买 合金", v, s.focus == 9, !trade_affordable(9));
+        set_row(10, 236, "返回", "", s.focus == 10, false);
     } else {
-        for (int i = 0; i < 8; i++) set_row(i, 46 + i * 21, "—", "需贸易站", false, true);
-        set_row(8, 215, "返回", "", s.focus == 8, false);
+        for (int i = 0; i < 10; i++) set_row(i, 46 + i * 19, "—", "需贸易站", false, true);
+        set_row(10, 236, "返回", "", s.focus == 10, false);
     }
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(s_hint, 0, 238);
+    lv_obj_set_pos(s_hint, 0, 258);
     lv_label_set_text(s_hint, "游牧商人:以毛皮/鳞/牙易货");
 }
 
 static void render_settings(void) {
     render_topbar("设置");
-    render_tabs(3, forest_open(), nav_tab_enabled(2), -1);
+    render_tabs(4, forest_open(), nav_tab_enabled(2), -1);
     set_row(0, 52, "操作说明", "键位:三键", s.focus == 0, false);
     set_row(1, 80, "重开本局", "需确认", s.focus == 1, false);
-    set_row(2, 108, "关于", "v0.6", s.focus == 2, false);
+    char about[28];   // 关于行:版本 + 周目(M5 周目继承;缓冲按 %u 满宽留量)
+    snprintf(about, sizeof(about), "v0.7·第%u周目",
+             (unsigned)(s.game.prestige_count + 1u));
+    set_row(2, 108, "关于", about, s.focus == 2, false);
     char seed[12];
     snprintf(seed, sizeof(seed), "%u", (unsigned)s.game.map_seed);
     set_row(3, 136, "世界种子", seed, s.focus == 3, true);   // 只读:存档同图复现
@@ -1440,6 +1501,8 @@ static const char *k_res_str[DR_RES_KIND_COUNT] = {
     [DR_RES_SULPHUR] = "硫", [DR_RES_BULLETS] = "弹", [DR_RES_ALIEN] = "金",
     [DR_RES_CHARM] = "符", [DR_RES_LEATHER] = "革", [DR_RES_SCALES] = "鳞",
     [DR_RES_TEETH] = "牙", [DR_RES_CLOTH] = "布", [DR_RES_MEDICINE] = "药",
+    [DR_RES_ENERGY_CELL] = "能", [DR_RES_GRENADE] = "雷",
+    [DR_RES_BOLAS] = "锤",
 };
 
 // 旗标代价的显示名(现有:火把;新旗标代价须在此登记)
@@ -1512,16 +1575,22 @@ static void render_confirm(void) {
     lv_obj_set_pos(s_dpanel, 22, 60);   // 水平居中,垂直 (320-200)/2=60
     lv_obj_set_size(s_dpanel, 196, 200);
     lv_obj_clear_flag(s_dtitle, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(s_dtitle, "确认操作");
+    lv_label_set_text(s_dtitle,
+                      s.confirm_from == 2 ? "离开" : "确认操作");
     lv_obj_clear_flag(s_dbody, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(s_dbody, 0, 42);
     lv_obj_set_size(s_dbody, 176, 40);
-    set_dbody("确定重开本局?当前进度将丢失。");
+    set_dbody(s.confirm_from == 2
+                  ? "要离开了。这一去,不会再回来。"
+                  : "确定重开本局?当前进度将丢失。");
     for (int i = 0; i < 2; i++) {
         actrow_t *a = &s_dacts[i];
         lv_obj_clear_flag(a->row, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_pos(a->row, 0, 130 + i * 24);
-        set_act(a, i == 0 ? "确认执行" : "取消", s.focus == i, 0);
+        set_act(a,
+                s.confirm_from == 2 ? (i == 0 ? "升空" : "再待会儿")
+                                    : (i == 0 ? "确认执行" : "取消"),
+                s.focus == i, 0);
     }
     for (int i = 2; i < 4; i++)
         lv_obj_add_flag(s_dacts[i].row, LV_OBJ_FLAG_HIDDEN);
@@ -1627,6 +1696,177 @@ static void render_craft(void) {
     lv_label_set_text(s_hint, "武器/护甲自动装备取最优;水具/背具即刻生效");
 }
 
+// ---- 星舰页(原版 An Old Starship 页签;M5) ----
+// 行序:加固船壳/升级引擎/[制造…]/升空/返回(制造行在执行者了结后出现)
+static int ship_rows(void) { return dr_fab_unlocked(&s.game) ? 5 : 4; }
+
+static void render_ship(void) {
+    render_topbar("星舰");
+    render_tabs(3, forest_open(), nav_tab_enabled(2), -1);
+    for (int i = 0; i < 4; i++) {
+        cell_base(i, i * 49, 48);
+        lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    for (int i = 4; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text_fmt(s_cells[0], "壳 %u", s.game.ship_hull);
+    lv_label_set_text_fmt(s_cells[1], "推 %u", s.game.ship_thrusters);
+    cell_res(2, "金", s.game.res[DR_RES_ALIEN]);
+    cell_res(3, "能", s.game.res[DR_RES_ENERGY_CELL]);
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    bool no_alloy = s.game.res[DR_RES_ALIEN] < DR_SHIP_ALLOY_PER_HULL;
+    char v[24];
+    int row = 0;
+    snprintf(v, sizeof(v), "船壳%u→%u", s.game.ship_hull, s.game.ship_hull + 1);
+    set_row(row, 96 + row * 24, "加固船壳", v, s.focus == row, no_alloy); row++;
+    snprintf(v, sizeof(v), "推进%u→%u", s.game.ship_thrusters,
+             s.game.ship_thrusters + 1);
+    set_row(row, 96 + row * 24, "升级引擎", v, s.focus == row, no_alloy); row++;
+    if (dr_fab_unlocked(&s.game)) {
+        set_row(row, 96 + row * 24, "制造…", "制造台", s.focus == row, false);
+        row++;
+    }
+    if (!dr_ship_can_liftoff(&s.game))
+        snprintf(v, sizeof(v), "需船壳");
+    else if ((int32_t)(s.liftoff_cd_ms - now_ms) > 0)
+        snprintf(v, sizeof(v), "%lds",
+                 (long)((s.liftoff_cd_ms - now_ms + 999) / 1000));
+    else
+        snprintf(v, sizeof(v), "就绪");
+    // 与出发远征同款:不可升空/冷却中置灰但可聚焦(确定给提示,不做死键)
+    set_row(row, 96 + row * 24, "升空", v, s.focus == row,
+            !dr_ship_can_liftoff(&s.game) ||
+                (int32_t)(s.liftoff_cd_ms - now_ms) > 0);
+    row++;
+    set_row(row, 96 + row * 24, "返回", "", s.focus == row, false);
+    for (int i = row + 1; i < LIST_ROWS; i++)
+        lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(s_hint, 0, 236);
+    if (no_alloy) {
+        lv_label_set_text(s_hint, "异星合金:贸易/病人/城市深处");
+    } else {
+        char h[40];
+        snprintf(h, sizeof(h), "推进%u 磨难段%u(段均船壳-1)",
+                 s.game.ship_thrusters, dr_ship_drift_segments(&s.game));
+        lv_label_set_text(s_hint, h);
+    }
+}
+
+// ---- 制造台页(星舰页"制造…"进入;M5 fabricator) ----
+static const char *fab_name(uint8_t f) {
+    static const char *n[DR_FAB_KIND_COUNT] = {
+        "刺刀", "激光步枪", "手雷", "流星锤",
+    };
+    return n[f];
+}
+
+static void render_fab(void) {
+    render_topbar("制造台");
+    for (int i = 0; i < 4; i++) {
+        cell_base(i, i * 49, 24);
+        lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    for (int i = 4; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
+    cell_res(0, "木", s.game.res[DR_RES_WOOD]);
+    cell_res(1, "能", s.game.res[DR_RES_ENERGY_CELL]);
+    cell_res(2, "鳞", s.game.res[DR_RES_SCALES]);
+    cell_res(3, "牙", s.game.res[DR_RES_TEETH]);
+    static const struct { uint8_t res; const char *label; } comps[] = {
+        { DR_RES_WOOD, "木" }, { DR_RES_IRON, "铁" },
+        { DR_RES_ENERGY_CELL, "能" }, { DR_RES_SCALES, "鳞" },
+        { DR_RES_TEETH, "牙" },
+    };
+    for (int f = 0; f < DR_FAB_KIND_COUNT; f++) {
+        char v[40];
+        bool owned = dr_fab_owned(&s.game, (uint8_t)f);
+        bool can = dr_fab_ready(&s.game, (uint8_t)f);
+        if (owned) {
+            snprintf(v, sizeof(v), "已有");
+        } else {
+            int n = 0;
+            for (int k = 0; k < 5; k++) {
+                uint32_t need = dr_fab_need(&s.game, (uint8_t)f, comps[k].res);
+                if (!need) continue;
+                if (!can && s.game.res[comps[k].res] < need) {
+                    if (n == 0) n = snprintf(v, sizeof(v), "缺");
+                    n += snprintf(v + n, sizeof(v) - n, "%lu%s",
+                                  (unsigned long)(need - s.game.res[comps[k].res]),
+                                  comps[k].label);
+                } else {
+                    n += snprintf(v + n, sizeof(v) - n, "%lu%s",
+                                  (unsigned long)need, comps[k].label);
+                }
+            }
+        }
+        set_row(f, 52 + f * 23, fab_name((uint8_t)f), v, s.focus == f, !can);
+    }
+    set_row(4, 52 + 4 * 23, "返回", "", s.focus == 4, false);
+    for (int i = 5; i < LIST_ROWS; i++)
+        lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(s_hint, 0, 170);
+    lv_label_set_text(s_hint, "武器取最优;雷/锤可重复造");
+}
+
+// ---- 升空叙事页(M5 拍板:替代原版 2D 太空射击) ----
+#define LIFT_CRASH 200u   // lift_seg 特值:坠毁段
+static const char *const k_lift_seg[] = {
+    "点火。引擎的轰鸣震得舱壁发颤,尘土从船身上簌簌落下。",
+    "对流层。舷窗外云层翻涌,像一锅烧开的灰汤。",
+    "平流层。天空褪成一种更深的蓝,村庄小得像一粒尘。",
+    "中间层。星光在白昼里显形,冷而硬。",
+    "热层。船壳微微发烫,仪表的光在黑暗里跳动。",
+    "逃逸层。重力终于松开了手。",
+    "太空。死一样的寂静,只剩引擎的低鸣。",
+    "远处有一个光点,固执地亮着。",
+};
+static const char k_lift_drift[] =
+    "燃料不足的警告响起。船身在黑暗里漂流,撞上一片碎片。";
+static const char k_lift_crash[] =
+    "船壳裂开了。警报声慢下来,一切慢下来,然后是漫长的坠落。";
+
+static uint8_t lift_ndrift(void) {
+    return (s.lift_total > 8) ? (uint8_t)(s.lift_total - 8) : 0;
+}
+
+static void render_liftoff(void) {
+    render_topbar("升空");
+    for (int i = 0; i < 2; i++) {
+        cell_base(i, i * 49, 24);
+        lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    for (int i = 2; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text_fmt(s_cells[0], "壳 %u", s.game.ship_hull);
+    lv_label_set_text_fmt(s_cells[1], "推 %u", s.game.ship_thrusters);
+    const char *txt;
+    if (s.lift_seg == LIFT_CRASH) txt = k_lift_crash;
+    else if (s.lift_seg < 7) txt = k_lift_seg[s.lift_seg];
+    else if (s.lift_seg < 7 + lift_ndrift()) txt = k_lift_drift;
+    else txt = k_lift_seg[7];   // 光点(固定尾段)
+    set_story(txt);
+    set_act(&s_acts[0], "继续", s.focus == 0, 0);
+    lv_obj_set_pos(s_acts[0].row, 0, 236);
+    lv_obj_clear_flag(s_acts[0].row, LV_OBJ_FLAG_HIDDEN);
+}
+
+// ---- 结局页(M5) ----
+static const char k_ending[] =
+    "飞船掠过碎片云。巨大的世界舰静静漂着,伤痕累累,再没有灯火。\n"
+    "空气越来越薄,舱里越来越冷。\n"
+    "你把坐标交给了星星。剩下的路,让它们领。\n"
+    "——你离开了这颗星球。";
+
+static void render_ending(void) {
+    render_topbar("结局");
+    set_story(k_ending);
+    set_act(&s_acts[0], "继续游玩", s.focus == 0, 0);
+    lv_obj_set_pos(s_acts[0].row, 0, 212);
+    lv_obj_clear_flag(s_acts[0].row, LV_OBJ_FLAG_HIDDEN);
+    set_act(&s_acts[1], "开新周目", s.focus == 1, 0);
+    lv_obj_set_pos(s_acts[1].row, 0, 236);
+    lv_obj_clear_flag(s_acts[1].row, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void render_title(void) {
     lv_label_set_text(s_topbar, "");
     lv_label_set_text(s_batt, "");
@@ -1653,6 +1893,10 @@ static void render(void) {
         case PG_EVENT:   render_event(); break;
         case PG_CONFIRM: render_confirm(); break;
         case PG_CRAFT:   render_craft(); break;
+        case PG_SHIP:    render_ship(); break;
+        case PG_FAB:     render_fab(); break;
+        case PG_LIFTOFF: render_liftoff(); break;
+        case PG_ENDING:  render_ending(); break;
     }
     // 就地提示:渲染末覆盖提示行(仅对当前显示提示行的页面生效;
     // 到期由 tick 清除并触发整页重画,恢复各页自己的提示文案与暗色)
@@ -1675,11 +1919,13 @@ static int page_lines(void) {
         case PG_BUILD: return DR_BLD_KIND_COUNT + 1;
         case PG_VILLAGE: return 9;   // 采集/陷阱/采集者 + 职业窗口5 + 返回
         case PG_CRAFT:   return s.craft_row_count + 1;   // 可见制造项 + 返回
-        case PG_MAP: return s.game.in_wilderness ? 5 : 7;
-        // 远征:东南西北+吃干肉 / 整备:干肉/药/子弹/武器(只读)/护甲(只读)/出发/返回
+        case PG_MAP: return s.game.in_wilderness ? 5 : 10;
+        // 远征:东南西北+吃干肉 / 整备:6 携带行+武器(只读)/护甲(只读)/出发/返回
         case PG_RUIN: return 2;    // 搜索 / 离开
-        case PG_COMBAT: return 4;
-        case PG_TRADE: return 9;
+        case PG_COMBAT:            // 攻击/吃/药/逃 + 携带中的手雷/流星锤行
+            return 4 + (dr_world_carry_grenades(&s_world) > 0 ? 1 : 0) +
+                       (dr_world_carry_bolas(&s_world) > 0 ? 1 : 0);
+        case PG_TRADE: return 11;   // 10 档货(M5 +元件/合金)+ 返回
         case PG_SETTINGS: return 7;   // 说明/重开/关于/种子/存档/熄屏/返回
         case PG_EVENT: {
             uint16_t c = 0;
@@ -1687,6 +1933,10 @@ static int page_lines(void) {
             return ev[s.ev_idx].choice_count;
         }
         case PG_CONFIRM: return 2;
+        case PG_SHIP:    return ship_rows();
+        case PG_FAB:     return DR_FAB_KIND_COUNT + 1;   // 4 制造项 + 返回
+        case PG_LIFTOFF: return 1;                       // 继续
+        case PG_ENDING:  return 2;                       // 继续游玩/开新周目
         default: return 1;
     }
 }
@@ -1732,6 +1982,12 @@ static bool trade_affordable(uint8_t item) {
         case DR_TRADE_COMPASS:return s.game.res[DR_RES_FUR] >= 400u &&
                                       s.game.res[DR_RES_SCALES] >= 20u &&
                                       s.game.res[DR_RES_TEETH] >= 10u;
+        case DR_TRADE_ENERGY_CELL:
+            return s.game.res[DR_RES_SCALES] >= 10u &&
+                   s.game.res[DR_RES_TEETH] >= 10u;
+        case DR_TRADE_ALIEN:return s.game.res[DR_RES_FUR] >= 1500u &&
+                                      s.game.res[DR_RES_SCALES] >= 750u &&
+                                      s.game.res[DR_RES_TEETH] >= 300u;
         default: return false;
     }
 }
@@ -1754,16 +2010,22 @@ static bool row_enabled(int idx) {
                 return dr_rules_job_unlocked(&s.game, (uint8_t)job);
             }
         case PG_TRADE:
-            return idx == 8 || trade_affordable((uint8_t)idx);
+            return idx == 10 || trade_affordable((uint8_t)idx);
         case PG_MAP:
             if (!s.game.in_wilderness) {
-                if (idx == 0 || idx == 6) return true;         // 干肉 / 返回
+                if (idx == 0 || idx == 9) return true;         // 干肉 / 返回
                 if (idx == 1) return s.game.res[DR_RES_MEDICINE] > 0 ||
                                    dr_world_carry_medicine(&s_world) > 0;
                 if (idx == 2) return s.game.res[DR_RES_BULLETS] > 0 ||
                                    dr_world_carry_bullets(&s_world) > 0;
-                if (idx == 3 || idx == 4) return false;        // 武器/护甲只读
-                // idx 5 = 出发:需已带干肉。冷却中仍可选(渲染置灰+确定给
+                if (idx == 3) return s.game.res[DR_RES_ENERGY_CELL] > 0 ||
+                                   dr_world_carry_cells(&s_world) > 0;
+                if (idx == 4) return s.game.res[DR_RES_GRENADE] > 0 ||
+                                   dr_world_carry_grenades(&s_world) > 0;
+                if (idx == 5) return s.game.res[DR_RES_BOLAS] > 0 ||
+                                   dr_world_carry_bolas(&s_world) > 0;
+                if (idx == 6 || idx == 7) return false;        // 武器/护甲只读
+                // idx 8 = 出发:需已带干肉。冷却中仍可选(渲染置灰+确定给
                 // toast 反馈)——此前冷却期静默跳焦,用户"点了没反应"(真机反馈)
                 return s.game.food > 0;
             }
@@ -1786,6 +2048,17 @@ static bool row_enabled(int idx) {
         }
         case PG_SETTINGS:
             return idx != 3 && idx != 4;            // 世界种子/存档为只读行
+        case PG_SHIP: {
+            bool fab = dr_fab_unlocked(&s.game);
+            if (idx == 0 || idx == 1)                // 加固/升级:需异星合金
+                return s.game.res[DR_RES_ALIEN] >= DR_SHIP_ALLOY_PER_HULL;
+            if (fab && idx == 2) return true;        // 制造…
+            if (idx == ship_rows() - 1) return true; // 返回
+            return true;   // 升空:不可升空也可聚焦(确定给提示,与出发同款)
+        }
+        case PG_FAB:
+            return idx >= DR_FAB_KIND_COUNT ||
+                   dr_fab_ready(&s.game, (uint8_t)idx);
         default:
             return true;   // 主页动作/设置/地图/弹窗选项均无禁用态
     }
@@ -1809,6 +2082,26 @@ static void page_goto(page_t p) {
     if (p == PG_HOME && dr_rules_builder_visit(&s.game)) {
         log_push("她站在火边:可以帮忙了");
         s.save_pending = true;
+    }
+    if (p == PG_SHIP) {
+        // 首访通知(原版 Ship.onArrival seenShip)
+        if (!(s.game.flags & ((uint64_t)1u << DR_FLAG_SHIP_SEEN))) {
+            s.game.flags |= (uint64_t)1u << DR_FLAG_SHIP_SEEN;
+            log_push("碎片云之上,流浪者舰队仍在盘旋");
+            log_push("你在这颗星球上待得太久了");
+            s.save_pending = true;
+        }
+        // 执行者未了结:进入即触发(原版星舰守卫;事件触发必须走 page_goto,
+        // 这里在同一调用内完成切页,等价于递归调 page_goto(PG_EVENT))
+        if (s.game.exec_state == 0) {
+            uint16_t idx = dr_events_find(DR_T_EV_EXEC);
+            if (idx != 0xFFFFu) {
+                s.ev_idx = idx;
+                s.ev_from = (uint8_t)PG_SHIP;
+                s.page = PG_EVENT;
+                s.focus = 0;
+            }
+        }
     }
     if (!row_enabled(0)) focus_move(1);   // 首行禁用则落到首个可用行
     s.dirty = true;
@@ -1882,6 +2175,16 @@ static void village_action(int idx) {
     }
 }
 
+// 升空开始:冷却 120s(原版 LIFTOFF_COOLDOWN,按下即计);段数=8 固定+磨难段
+static void liftoff_begin(void) {
+    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    s.liftoff_cd_ms = now_ms + DR_SHIP_LIFTOFF_COOLDOWN_S * 1000u;
+    s.lift_total = (uint8_t)(8 + dr_ship_drift_segments(&s.game));
+    s.lift_seg = 0;
+    log_push("升空!");
+    page_goto(PG_LIFTOFF);
+}
+
 static void list_action(int idx) {
     switch (s.page) {
         case PG_BUILD:
@@ -1922,12 +2225,12 @@ static void list_action(int idx) {
         case PG_MAP: {
             uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
             if (!s.game.in_wilderness) {
-                if (idx <= 2) {                     // 进入携带调配
+                if (idx <= 5) {                     // 进入携带调配
                     s.outfit_adj = (int8_t)idx;
                     s.dirty = true;
                     break;
                 }
-                if (idx == 5) {                     // 出发远征(需已带干肉)
+                if (idx == 8) {                     // 出发远征(需已带干肉)
                     if ((int32_t)(now_ms - s.embark_cd_ms) < 0) {
                         log_push("歇一歇再出发");
                         toast("歇一歇再出发");
@@ -1990,7 +2293,16 @@ static void list_action(int idx) {
                     case DR_MOVE_IRON:      log_push("发现铁矿!(回家后可派矿工)"); break;
                     case DR_MOVE_COAL:      log_push("发现煤矿!(回家后可派矿工)"); break;
                     case DR_MOVE_SULPHUR:   log_push("发现硫磺矿!(回家后可派矿工)"); break;
-                    case DR_MOVE_SHIP:      log_push("一艘坠毁的星舰躺在荒野上"); break;
+                    case DR_MOVE_SHIP:
+                        if (!ship_open()) {
+                            s.game.flags |= (uint64_t)1u << DR_FLAG_SHIP_OPEN;
+                            log_push("一艘坠毁的星舰躺在荒野上");
+                            log_push("星舰页签已开启");
+                            s.save_pending = true;
+                        } else {
+                            log_push("一艘坠毁的星舰躺在荒野上");
+                        }
+                        break;
                     case DR_MOVE_HOUSE:
                     case DR_MOVE_CAVE:
                     case DR_MOVE_TOWN:
@@ -2021,18 +2333,44 @@ static void list_action(int idx) {
             break;
         }
         case PG_COMBAT: {
+            // 行序与渲染一致:攻击/[手雷]/[流星锤]/吃干肉/用药/逃跑
+            int act = 0, rem = idx;
+            if (rem > 0) {
+                rem--;
+                act = -1;
+                if (dr_world_carry_grenades(&s_world) > 0) {
+                    if (rem == 0) act = 1;
+                    rem--;
+                }
+                if (act < 0 && dr_world_carry_bolas(&s_world) > 0) {
+                    if (rem == 0) act = 2;
+                    rem--;
+                }
+                if (act < 0) act = 3 + rem;
+            }
             dr_fight_result_t r;
-            if (idx == 0)            r = dr_world_fight_attack(&s_world, &s.game);
-            else if (idx == 1)       r = dr_world_fight_eat(&s_world, &s.game);
-            else if (idx == 2)       r = dr_world_fight_medicine(&s_world, &s.game);
-            else                     r = dr_world_fight_flee(&s_world, &s.game);
+            if (act == 0)          r = dr_world_fight_attack(&s_world, &s.game);
+            else if (act == 1)     r = dr_world_fight_grenade(&s_world, &s.game);
+            else if (act == 2)     r = dr_world_fight_bolas(&s_world, &s.game);
+            else if (act == 3)     r = dr_world_fight_eat(&s_world, &s.game);
+            else if (act == 4)     r = dr_world_fight_medicine(&s_world, &s.game);
+            else                   r = dr_world_fight_flee(&s_world, &s.game);
             const char *en = dr_enemy_name(dr_world_fight_enemy(&s_world, &s.game));
             (void)en;
             switch (r) {
                 case DR_FIGHT_WIN:
                     log_push("击败了它!战利品入包");
                     s.save_pending = true;
-                    page_goto(PG_MAP);
+                    if (s.fight_return == PG_SHIP) {
+                        // 执行者被击溃:制造台上线(与和解同口径解锁)
+                        s.fight_return = PG_MAP;
+                        s.game.exec_state = 2;
+                        log_push("守卫瘫成一堆废铁");
+                        log_push("舱室尽头,一台制造台亮了起来");
+                        page_goto(PG_SHIP);
+                    } else {
+                        page_goto(PG_MAP);
+                    }
                     break;
                 case DR_FIGHT_LOSE:
                     log_push("你被它打倒了,物资全失");
@@ -2040,16 +2378,28 @@ static void list_action(int idx) {
                     s.embark_cd_ms = (uint32_t)(esp_timer_get_time() / 1000) +
                                      120u * 1000u;
                     s.save_pending = true;
-                    page_goto(PG_MAP);
+                    if (s.fight_return == PG_SHIP) {
+                        // 执行者未了结:爬回小屋(下次进星舰页会再触发)
+                        s.fight_return = PG_MAP;
+                        page_goto(PG_HOME);
+                    } else {
+                        page_goto(PG_MAP);
+                    }
                     break;
                 case DR_FIGHT_FLED:
                     log_push("逃掉了");
-                    page_goto(PG_MAP);
+                    if (s.fight_return == PG_SHIP) {
+                        s.fight_return = PG_MAP;
+                        page_goto(PG_HOME);   // 逃离星舰,执行者仍守着舱门
+                    } else {
+                        page_goto(PG_MAP);
+                    }
                     break;
                 case DR_FIGHT_NONE:
-                    if (idx == 1) { log_push("没有干肉了"); toast("没有干肉了"); }
-                    if (idx == 2) { log_push("没有药了");   toast("没有药了"); }
+                    if (act == 3) { log_push("没有干肉了"); toast("没有干肉了"); }
+                    if (act == 4) { log_push("没有药了");   toast("没有药了"); }
                     break;
+                case DR_FIGHT_STUN:       log_push("它被流星锤缠住了"); break;
                 case DR_FIGHT_MISS:       log_push("挥空了"); break;
                 case DR_FIGHT_HIT:        log_push("命中!"); break;
                 case DR_FIGHT_ENEMY_HIT:  log_push("它反击得手"); break;
@@ -2096,9 +2446,10 @@ static void list_action(int idx) {
             break;
         }
         case PG_TRADE: {
-            if (idx == 8) { page_goto(PG_HOME); break; }
+            if (idx == 10) { page_goto(PG_HOME); break; }
             static const char *goods[DR_TRADE_KIND_COUNT] = {
                 "鳞", "牙", "铁", "煤", "钢", "子弹", "药", "罗盘",
+                "能量元件", "异星合金",
             };
             if (idx == DR_TRADE_COMPASS &&
                 (s.game.flags & ((uint64_t)1u << DR_FLAG_COMPASS))) {
@@ -2133,6 +2484,61 @@ static void list_action(int idx) {
             }
             break;
         }
+        case PG_SHIP: {
+            uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            bool fab = dr_fab_unlocked(&s.game);
+            if (idx == 0) {                       // 加固船壳(1 合金/点,原版)
+                if (dr_ship_reinforce(&s.game)) {
+                    char line[32];
+                    snprintf(line, sizeof(line), "船壳加固到 %u",
+                             s.game.ship_hull);
+                    log_push(line); toast(line);
+                    s.save_pending = true;
+                } else { log_push("没有异星合金"); toast("没有异星合金"); }
+                break;
+            }
+            if (idx == 1) {                       // 升级引擎(1 合金/个,原版)
+                if (dr_ship_upgrade(&s.game)) {
+                    char line[32];
+                    snprintf(line, sizeof(line), "推进器增至 %u",
+                             s.game.ship_thrusters);
+                    log_push(line); toast(line);
+                    s.save_pending = true;
+                } else { log_push("没有异星合金"); toast("没有异星合金"); }
+                break;
+            }
+            if (fab && idx == 2) { page_goto(PG_FAB); break; }
+            if (idx == ship_rows() - 1) { page_goto(PG_HOME); break; }
+            // 升空(需 hull>0;冷却 120s;首飞先确认,原版 seenWarning)
+            if (!dr_ship_can_liftoff(&s.game)) {
+                log_push("船壳太脆,先加固"); toast("先加固船壳");
+                break;
+            }
+            if ((int32_t)(s.liftoff_cd_ms - now_ms) > 0) {
+                log_push("引擎还在冷却"); toast("引擎还在冷却");
+                break;
+            }
+            if (!(s.game.flags & ((uint64_t)1u << DR_FLAG_LIFT_WARNED))) {
+                s.confirm_from = 2;
+                page_goto(PG_CONFIRM);
+                break;
+            }
+            liftoff_begin();
+            break;
+        }
+        case PG_FAB: {
+            if (idx >= DR_FAB_KIND_COUNT) { page_goto(PG_SHIP); break; }
+            if (dr_fab_make(&s.game, (uint8_t)idx)) {
+                char line[40];
+                snprintf(line, sizeof(line), "造成了 %s",
+                         fab_name((uint8_t)idx));
+                log_push(line); toast(line);
+                s.save_pending = true;
+            } else {
+                log_push("材料不够"); toast("材料不够");
+            }
+            break;
+        }
         case PG_SETTINGS:
             if (idx == 6) page_goto(PG_HOME);
             else if (idx == 0) log_push("上/下选择 · 确定执行 · 长按返回");
@@ -2148,7 +2554,15 @@ static void list_action(int idx) {
                 s.save_pending = true;
                 log_push(lv ? "熄屏已开,长按下键手动熄屏" : "熄屏已关");
             }
-            else log_push("《小黑屋》A Dark Room 重制");
+            else {                                     // 关于:版本 + 通关纪录
+                log_push("《小黑屋》A Dark Room 重制 v0.7");
+                if (s.game.prestige_count) {
+                    char line[32];
+                    snprintf(line, sizeof(line), "已通关 %u 次",
+                             (unsigned)s.game.prestige_count);
+                    log_push(line);
+                }
+            }
             break;
         default:
             break;
@@ -2166,7 +2580,50 @@ static void handle_ok(void) {
         case PG_COMBAT:
         case PG_TRADE:
         case PG_CRAFT:
+        case PG_SHIP:
+        case PG_FAB:
         case PG_SETTINGS: list_action(s.focus); break;
+        case PG_LIFTOFF: {   // 叙事逐段推进;磨难段船壳-1,归零=坠毁
+            if (s.lift_seg == LIFT_CRASH) {
+                log_push("你爬出残骸,船壳彻底碎了");
+                page_goto(PG_SHIP);
+                break;
+            }
+            s.lift_seg++;
+            if (s.lift_seg >= 7 && s.lift_seg < 7 + lift_ndrift()) {
+                if (s.game.ship_hull > 0) s.game.ship_hull--;
+                s.save_pending = true;
+                if (s.game.ship_hull == 0) {
+                    s.lift_seg = LIFT_CRASH;
+                    log_push("燃料耗尽,船壳撞碎了");
+                }
+            } else if (s.lift_seg >= s.lift_total) {
+                // 到达终点 = 通关(每周目结算一次 prestige)
+                if (!s.game.won_this_run) {
+                    dr_prestige_save(&s.game, &s.ev_rng);
+                    log_push("抵达光点。通关!");
+                }
+                s.save_pending = true;
+                page_goto(PG_ENDING);
+            }
+            break;
+        }
+        case PG_ENDING:
+            if (s.focus == 0) {
+                page_goto(PG_SHIP);   // 继续游玩(遗产保持待继承)
+            } else {
+                uint32_t seed = (uint32_t)esp_timer_get_time() ^ 0x5EED;
+                dr_prestige_new_game(&s.game, seed, dr_port_now_ts());
+                dr_world_gen(&s_world, s.game.map_seed);   // 新周目换新图
+                s_log_cnt = 0;
+                char line[40];
+                snprintf(line, sizeof(line), "第 %u 周目,开始了",
+                         (unsigned)s.game.prestige_count + 1u);
+                log_push(line);
+                s.save_pending = true;
+                page_goto(PG_TITLE);
+            }
+            break;
         case PG_EVENT: {
             uint16_t count = 0;
             const dr_event_t *ev = dr_events_table(&count);
@@ -2190,12 +2647,27 @@ static void handle_ok(void) {
                 dr_world_apply_map(&s_world, &s.game)) {
                 log_push("地图上多了一片探明的区域");
             }
+            // 执行者"拒绝":遭遇战由 UI 桥接启动(事件引擎够不着战斗态);
+            // 敌人取士兵表(原版星舰守卫为机械系,设备适配复用遭遇敌表)
+            if (cur->text_id == DR_T_EV_EXEC &&
+                cur->choices[bought_ch].text_id == DR_T_EV_EXEC_REFUSE) {
+                s_world.fight_enemy = DR_ENEMY_SOLDIER;
+                s_world.fight_hp = 50;              // 士兵(d>20 荒地):50 HP
+                s_world.fight_round = 0;
+                s_world.fight_stun = 0;
+                s_world.fight_from_city = false;
+                s.fight_return = PG_SHIP;
+                log_push("守卫的独眼亮起红光,扑了过来!");
+                page_goto(PG_COMBAT);
+                break;
+            }
             if (chain >= 0) {
                 s.ev_idx = (uint16_t)chain;
                 s.focus = 0;
                 if (!row_enabled(0)) focus_move(1);   // 后续事件首行不可付则跳过
             } else {
-                page_goto(s.ev_from == PG_VILLAGE ? PG_VILLAGE : PG_HOME);
+                page_goto(s.ev_from == PG_VILLAGE ? PG_VILLAGE :
+                          s.ev_from == PG_SHIP ? PG_SHIP : PG_HOME);
             }
             break;
         }
@@ -2204,12 +2676,22 @@ static void handle_ok(void) {
                 if (s.confirm_from == 0) {
                     uint32_t seed = (uint32_t)esp_timer_get_time() ^ 0x5EED;
                     dr_game_init(&s.game, seed, dr_port_now_ts());
+                    dr_world_gen(&s_world, s.game.map_seed);   // 新图与新档同种
                     s_log_cnt = 0;   // 新的一局:日志清零
                     log_push("新的一局开始了");
+                    s.save_pending = true;
+                    page_goto(PG_SETTINGS);
+                } else if (s.confirm_from == 2) {
+                    // 首飞确认(原版 spaceShip.seenWarning):只问这一次
+                    s.game.flags |= (uint64_t)1u << DR_FLAG_LIFT_WARNED;
+                    liftoff_begin();
+                } else {
+                    page_goto(PG_TRADE);
                 }
-                s.save_pending = true;
+            } else {
+                page_goto(s.confirm_from == 0 ? PG_SETTINGS :
+                          s.confirm_from == 2 ? PG_SHIP : PG_TRADE);
             }
-            page_goto(s.confirm_from == 0 ? PG_SETTINGS : PG_TRADE);
             break;
     }
     s.dirty = true;
@@ -2383,10 +2865,15 @@ static bool forest_open(void) {
 static bool compass_held(void) {
     return (s.game.flags & ((uint64_t)1u << DR_FLAG_COMPASS)) != 0;
 }
+// 星舰页签门:踏上坠毁星舰格解锁(原版 features.location.spaceShip)
+static bool ship_open(void) {
+    return (s.game.flags & ((uint64_t)1u << DR_FLAG_SHIP_OPEN)) != 0;
+}
 static bool nav_tab_enabled(int i) {
     switch (i) {
         case 1: return forest_open();
         case 2: return compass_held();
+        case 3: return ship_open();
         default: return true;
     }
 }
@@ -2427,8 +2914,9 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             return;
         }
         if (s.page == PG_MAP && !s.game.in_wilderness && s.outfit_adj >= 0) {
-            static const uint8_t outfit_res[3] = {
-                DR_RES_FOOD, DR_RES_MEDICINE, DR_RES_BULLETS
+            static const uint8_t outfit_res[6] = {
+                DR_RES_FOOD, DR_RES_MEDICINE, DR_RES_BULLETS,
+                DR_RES_ENERGY_CELL, DR_RES_GRENADE, DR_RES_BOLAS
             };
             int16_t d = (btn == BSP_BTN_UP) ? 1 : -1;
             (void)dr_world_outfit_add(&s_world, &s.game,
@@ -2442,13 +2930,14 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
 
     if (ev == BSP_BTN_PRESS) {
         // 幽灵键窗已在函数头统一鉴别(I33),这里直接进动作分发
-        // 出发整备调配:上/下=±1,确定=切下一项(干肉→药→子弹→完成)
+        // 出发整备调配:上/下=±1,确定=切下一项(干肉→药→…→流星锤→完成)
         if (s.page == PG_MAP && s.outfit_adj >= 0) {
-            static const uint8_t outfit_res[3] = {
-                DR_RES_FOOD, DR_RES_MEDICINE, DR_RES_BULLETS
+            static const uint8_t outfit_res[6] = {
+                DR_RES_FOOD, DR_RES_MEDICINE, DR_RES_BULLETS,
+                DR_RES_ENERGY_CELL, DR_RES_GRENADE, DR_RES_BOLAS
             };
             if (btn == BSP_BTN_OK) {
-                s.outfit_adj = (s.outfit_adj >= 2) ? -1 : s.outfit_adj + 1;
+                s.outfit_adj = (s.outfit_adj >= 5) ? -1 : s.outfit_adj + 1;
                 s.dirty = true;
                 return;
             }
@@ -2486,13 +2975,13 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
             }
             return;
         }
-        // 主页:导航栏(小屋/村庄/荒野/≡)是焦点首区。动作区顶端向上进入导航;
+        // 主页:导航栏(小屋/村庄/荒野/星舰/≡)是焦点首区。动作区顶端向上进入导航;
         // 导航内 UP 在启用的 tab 间循环(未启用跳过)、DOWN 回到动作区首行;
         // OK 切页
         if (s.page == PG_HOME && s.nav_focus >= 0) {
             if (btn == BSP_BTN_UP) {
                 do {
-                    s.nav_focus = (s.nav_focus + 3) % 4;
+                    s.nav_focus = (s.nav_focus + 4) % 5;
                 } while (!nav_tab_enabled(s.nav_focus));
                 s.dirty = true;
             } else if (btn == BSP_BTN_DOWN) {
@@ -2510,7 +2999,10 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                     case 2: if (compass_held()) page_goto(PG_MAP);   // 罗盘开荒野(I27)
                             else { log_push("荒野尚未解锁"); go = false; }
                             break;
-                    case 3: page_goto(PG_SETTINGS); break;
+                    case 3: if (ship_open()) page_goto(PG_SHIP);
+                            else { log_push("尚未发现星舰"); go = false; }
+                            break;
+                    case 4: page_goto(PG_SETTINGS); break;
                 }
                 if (go) { s.nav_focus = -1; s.focus = 0; }
                 s.dirty = true;
@@ -2597,8 +3089,9 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                 s.dirty = true;
                 return;
             }
-            static const uint8_t outfit_res[3] = {
-                DR_RES_FOOD, DR_RES_MEDICINE, DR_RES_BULLETS
+            static const uint8_t outfit_res[6] = {
+                DR_RES_FOOD, DR_RES_MEDICINE, DR_RES_BULLETS,
+                DR_RES_ENERGY_CELL, DR_RES_GRENADE, DR_RES_BOLAS
             };
             int16_t d = (btn == BSP_BTN_UP) ? 5 : -5;
             if (!dr_world_outfit_add(&s_world, &s.game,
@@ -2638,6 +3131,8 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
                 }
                 page_goto(PG_HOME);
                 break;
+            case PG_SHIP:   page_goto(PG_HOME); break;
+            case PG_FAB:    page_goto(PG_SHIP); break;
             case PG_RUIN:   page_goto(PG_MAP);  break;
             default: break;
         }
@@ -2675,6 +3170,7 @@ void darkroom_app_enter(void) {
     s.nav_focus = -1;   // -1 = 焦点在动作区
     s.village_adj = -1; // -1 = 村庄页未进入人数调节
     s.outfit_adj = -1;  // -1 = 未在整备调配
+    s.fight_return = PG_MAP;   // 战斗结束默认回荒野页(执行者战临时改 PG_SHIP)
     s.boot_ms = (uint32_t)(esp_timer_get_time() / 1000);
     s.last_input_ms = s.boot_ms;   // 熄屏计时与开机防抖同基准
 
@@ -2808,6 +3304,17 @@ void dr_debug_force_event(uint16_t idx) {
     page_goto(PG_EVENT);
 }
 
+// 模拟器诊断:星舰页直达(仅主机构建;SIM_SHIP=exec,hull,thr,alloy)。
+// 注入页签旗标与船态,供星舰页/制造台/升空序列截图与按键实测。
+void dr_debug_set_ship(uint8_t exec, uint8_t hull, uint8_t thr, uint32_t alloy) {
+    s.game.flags |= (uint64_t)1u << DR_FLAG_SHIP_OPEN;
+    s.game.exec_state = exec;
+    s.game.ship_hull = hull;
+    s.game.ship_thrusters = thr;
+    s.game.res[DR_RES_ALIEN] = alloy;
+    page_goto(PG_SHIP);
+}
+
 // 模拟器诊断:打印对象树关键状态(仅主机构建使用)
 void dr_debug_dump(void) {
     ESP_LOGI(TAG, "dump page=%d focus=%d wood=%lu pop=%u fire=%u",
@@ -2821,9 +3328,11 @@ void dr_sweep_next(void) {
     static const page_t order[] = {
         PG_TITLE, PG_HOME, PG_BUILD, PG_VILLAGE, PG_MAP, PG_RUIN,
         PG_COMBAT, PG_TRADE, PG_SETTINGS, PG_EVENT, PG_CONFIRM,
+        PG_SHIP, PG_FAB, PG_LIFTOFF, PG_ENDING,
     };
     static int i = 0;
     page_goto(order[i % (sizeof(order) / sizeof(order[0]))]);
+    if (s.page == PG_LIFTOFF && s.lift_total < 8) s.lift_total = 8;  // 轮播兜底
     if (s.page == PG_EVENT) {
         uint16_t c = 0;
         dr_events_table(&c);

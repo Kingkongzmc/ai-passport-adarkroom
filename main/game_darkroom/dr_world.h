@@ -45,15 +45,19 @@ typedef struct {
     bool    visited_coal;
     bool    visited_sulphur;
     bool    outpost_used;     // 哨站补水每远征一次
-    // 携带与会话内背袋(药/子弹携带量;杂项战利品按资源入包,回家入库)
+    // 携带与会话内背袋(药/子弹/元件/手雷/流星锤携带量;杂项战利品按资源入包,回家入库)
     uint16_t carry_medicine;
     uint16_t carry_bullets;
+    uint16_t carry_cells;     // 能量元件(激光步枪弹药,原版 Path 承重 0.2)
+    uint16_t carry_grenades;  // 手雷(战斗消耗品,承重 1)
+    uint16_t carry_bolas;     // 流星锤(战斗消耗品,承重 0.5)
     uint32_t loot[DR_RES_KIND_COUNT];
     // 遭遇战状态
     uint8_t  fight_enemy;     // dr_enemy_t;KIND_COUNT=无
     uint16_t fight_hp;
     uint16_t fight_round;     // 敌人按 attackDelay 逢倍数回合反击
     uint16_t steps_since_fight;
+    uint8_t  fight_stun;      // 流星锤眩晕:敌人剩余停摆回合数(原版 stun)
     bool     fight_from_city; // 本场战斗来自城市搜索(胜利置 cityCleared 旗标)
     // 地点状态
     uint8_t  location;        // 当前地点 tile;0=不在地点
@@ -106,9 +110,12 @@ uint8_t dr_world_health_cap(const dr_game_t *g);
 // 出发携带(Path 承重制,重量单位=0.1):干肉/药 1.0,子弹 0.1,基础容量 10.0
 #define DR_BAG_CAP_TENTHS  100u
 uint16_t dr_world_bag_weight(const dr_game_t *g, const dr_world_t *w);
-// 携带量(药/子弹在会话内;干肉即 g->food)
+// 携带量(药/子弹/元件/手雷/流星锤在会话内;干肉即 g->food)
 uint16_t dr_world_carry_medicine(const dr_world_t *w);
 uint16_t dr_world_carry_bullets(const dr_world_t *w);
+uint16_t dr_world_carry_cells(const dr_world_t *w);
+uint16_t dr_world_carry_grenades(const dr_world_t *w);
+uint16_t dr_world_carry_bolas(const dr_world_t *w);
 bool dr_world_outfit_add(dr_world_t *w, dr_game_t *g, uint8_t res, int16_t delta);
 
 // ---- 遭遇战(原版 Encounters:距离三档 × 地形) ----
@@ -142,7 +149,8 @@ typedef enum {
     DR_FIGHT_HIT,           // 命中(敌人剩余血见 fight_hp)
     DR_FIGHT_ENEMY_HIT,     // 敌人命中
     DR_FIGHT_ENEMY_MISS,
-    DR_FIGHT_ENEMY_SKIP,    // 敌人本回合未到攻击间隔
+    DR_FIGHT_ENEMY_SKIP,    // 敌人本回合未到攻击间隔(或被流星锤眩晕)
+    DR_FIGHT_STUN,          // 流星锤命中:敌人眩晕两回合
 } dr_fight_result_t;
 
 bool     dr_world_fight_active(const dr_world_t *w);
@@ -152,7 +160,11 @@ dr_fight_result_t dr_world_fight_attack(dr_world_t *w, dr_game_t *g);
 dr_fight_result_t dr_world_fight_eat(dr_world_t *w, dr_game_t *g);      // 干肉 +8
 dr_fight_result_t dr_world_fight_medicine(dr_world_t *w, dr_game_t *g);  // +20 HP
 dr_fight_result_t dr_world_fight_flee(dr_world_t *w, dr_game_t *g);
-// 武器伤害(原版武器表;步枪耗 1 子弹)
+// 手雷:15 伤(耗 1 携带手雷,命中判定同攻击;原版 grenade)
+dr_fight_result_t dr_world_fight_grenade(dr_world_t *w, dr_game_t *g);
+// 流星锤:命中则敌人停摆 2 回合(耗 1 携带流星锤;原版 bolas stun)
+dr_fight_result_t dr_world_fight_bolas(dr_world_t *w, dr_game_t *g);
+// 武器伤害(原版武器表;步枪耗 1 子弹,激光步枪耗 1 能量元件)
 uint8_t dr_world_weapon_dmg(uint8_t weapon_lv);
 
 // ---- 地点搜索(设备适配"单次搜索"模型,DESIGN §9.8) ----
