@@ -365,6 +365,8 @@ static void set_story(const char *text) {
 // ===================================================================
 static lv_obj_t *s_t_big, *s_t_sub;    // 标题页大标题/副文案(专用)
 static lv_obj_t *s_t_ok;
+static lv_obj_t *s_t_rule, *s_t_fire;  // 顶饰线+火光带(美化 T3)
+static uint32_t s_title_reveal_ms;     // 副标题打字机基准(0=未开始)
 
 // 地形纹样描述符(定义见文件后部,图例在此先取址)
 static const lv_image_dsc_t k_pat_dots, k_pat_hstrip, k_pat_diag;
@@ -614,6 +616,24 @@ static void build_ui(void) {
     lv_obj_t *tok = label_new(s_t_ok, &dr_font_12, lv_color_hex(COL_GOLD), 0, 1, 120, 20);
     lv_obj_set_style_text_align(tok, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(tok, "OK键开始");
+    // 顶饰线+火光带(美化 T3):装饰暗于金;火光带=底部余烬(两段渐变,
+    // 顶部全透明→底部 ~35% 暖橙,主/渐同色仅透明度差)
+    s_t_rule = label_new(s_content, &dr_font_12, lv_color_hex(COL_DIM),
+                         0, 72, 200, 14);
+    lv_obj_set_style_text_align(s_t_rule, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(s_t_rule, "───── · ─────");
+    s_t_fire = lv_obj_create(s_content);
+    lv_obj_set_pos(s_t_fire, 0, 254);
+    lv_obj_set_size(s_t_fire, 198, 24);
+    lv_obj_set_style_radius(s_t_fire, 2, 0);
+    lv_obj_set_style_border_width(s_t_fire, 0, 0);
+    lv_obj_set_style_pad_all(s_t_fire, 0, 0);
+    lv_obj_set_style_bg_color(s_t_fire, lv_color_hex(COL_AMBER), 0);
+    lv_obj_set_style_bg_grad_color(s_t_fire, lv_color_hex(COL_AMBER), 0);
+    lv_obj_set_style_bg_main_opa(s_t_fire, 0, 0);
+    lv_obj_set_style_bg_grad_opa(s_t_fire, 89, 0);
+    lv_obj_set_style_bg_grad_dir(s_t_fire, LV_GRAD_DIR_VER, 0);
+    lv_obj_clear_flag(s_t_fire, LV_OBJ_FLAG_SCROLLABLE);
 
 
     // 地图 9×9 格 @(14,44) 格10px 间隔1(左移腾出右侧全量图例双列)
@@ -909,6 +929,8 @@ static void clear_scene(void) {
     lv_obj_add_flag(s_t_big, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_t_sub, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_t_ok, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_t_rule, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_t_fire, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_story, LV_OBJ_FLAG_HIDDEN);
     for (int i = 0; i < MAP_CELLS; i++) lv_obj_add_flag(s_map[i], LV_OBJ_FLAG_HIDDEN);
     for (int i = 0; i < LEG_KINDS; i++) {
@@ -2108,11 +2130,27 @@ static void render_ending(void) {
 }
 
 static void render_title(void) {
+    static const char sub[] = "屋里冷得刺骨";
     lv_label_set_text(s_topbar, "");
     lv_label_set_text(s_batt, "");
     lv_obj_clear_flag(s_t_big, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_t_sub, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_t_ok, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_t_rule, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_t_fire, LV_OBJ_FLAG_HIDDEN);
+    // 打字机(T3):250ms/字逐显 6 字;未完时由 tick 置脏续拍,完则静止
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    if (s_title_reveal_ms == 0) s_title_reveal_ms = now;
+    int k = (int)((now - s_title_reveal_ms) / 250u);
+    if (k > 6) k = 6;
+    char buf[24];
+    if (k > 0) {
+        memcpy(buf, sub, (size_t)k * 3);   // 全 CJK,3 字节/字,整字截断
+        buf[k * 3] = 0;
+    } else {
+        buf[0] = 0;
+    }
+    lv_label_set_text(s_t_sub, buf);
 }
 
 static void render(void) {
@@ -2320,6 +2358,7 @@ static void page_goto(page_t p) {
     s.focus = 0;
     s.village_adj = -1;   // 离开村庄页/任意切页退出人数调节
     s.outfit_adj = -1;    // 离开整备态
+    s_title_reveal_ms = 0;   // 标题打字机基准(T3):进标题页首帧重记
     // 回到小屋页 = 拜访房间(原版 onArrival):陌生人从沉睡中醒来帮忙
     if (p == PG_HOME && dr_rules_builder_visit(&s.game)) {
         log_push("她站在火边:可以帮忙了");
@@ -3029,6 +3068,10 @@ static void tick(lv_timer_t *t) {
         lv_obj_set_style_text_color(s_hint, lv_color_hex(COL_DIM), 0);
         s.dirty = true;
     }
+    // 标题页打字机未完(T3):逐拍置脏推进揭示,完则不再重绘
+    if (s.page == PG_TITLE && s_title_reveal_ms != 0 &&
+        (int)((now_ms - s_title_reveal_ms) / 250u) < 6)
+        s.dirty = true;
 
     static uint32_t last_batt_ms = 0;
     if (last_batt_ms == 0 || now_ms - last_batt_ms >= 30000u) {

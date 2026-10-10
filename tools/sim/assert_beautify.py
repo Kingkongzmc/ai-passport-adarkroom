@@ -70,6 +70,11 @@ CASES = {
   "settings_title":("设置标题中性灰", "b", 0, 0, 40, 20, DIM, 3),
   "ship_title":    ("星舰标题紫", "b", 0, 0, 40, 20, A_SHIP, 3),
   "fab_title":     ("制造台标题铁灰", "b", 0, 0, 40, 20, A_CRAFT, 3),
+  # ---- T3 标题页 ----
+  "title_rule":    ("顶饰线细线", "n", 33, 74, 165, 82, 100),
+  "fire_top":      ("火光带顶部透明", "p", 100, 256, PANEL, 6),
+  "fire_bottom":   ("火光带底部余烬", "p", 100, 276, (0x60, 0x40, 0x24), 16),
+  "title_big":     ("大标题金", "b", 60, 88, 138, 120, GOLD, 6),
   "combat_title":  ("战斗标题敌红", "b", 0, 0, 40, 20, ENEMY, 3),
   "liftoff_title": ("升空标题金豁免", "b", 0, 0, 40, 20, GOLD, 2),
   "ending_title":  ("结局标题金豁免", "b", 0, 0, 40, 20, GOLD, 4),
@@ -92,6 +97,18 @@ def main():
         if case is None:
             print(f"[FAIL] {name}: 未知用例"); fails += 1; continue
         desc, mode = case[0], case[1]
+        if mode == "n":   # 盒内非 PANEL 像素计数(细线/低对比装饰)
+            _, _, x0, y0, x1, y1, least = case
+            n = 0
+            for yy in range(c(x0, y0)[1], c(x1, y1)[1]):
+                for xx in range(c(x0, y0)[0], c(x1, y1)[0]):
+                    g = px[xx, yy]
+                    if abs(g[0]-28) + abs(g[1]-25) + abs(g[2]-23) > 24: n += 1
+            ok = n >= least
+            detail = f"box({x0},{y0})-({x1},{y1}) 非背景 {n} px (需≥{least})"
+            print(f"[{'PASS' if ok else 'FAIL'}] {name} ({desc}): {detail}")
+            if not ok: fails += 1
+            continue
         if mode == "p":
             _, _, cx, cy, exp, tol = case
             x, y = c(cx, cy)
