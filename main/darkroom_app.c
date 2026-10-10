@@ -109,6 +109,7 @@ static struct {
     uint8_t lift_seg;          // 升空叙事:当前段号(0=起飞)
     uint8_t lift_total;        // 升空叙事:总段数(8 固定 + 磨难段)
     int8_t fight_return;       // 战斗结束回页(默认 PG_MAP;执行者= PG_SHIP)
+    int8_t last_dir;           // 荒野上次行进方向(0..3;-1=无;I35 焦点记忆)
     int8_t outfit_adj;         // 出发整备:正在调配的物资(-1=无)
     bool screen_off;           // 熄屏态(背光 0,任意键唤醒并吞键,DESIGN §8.1)
     uint32_t last_input_ms;    // 最近一次真实按键(自动熄屏计时基准)
@@ -2110,6 +2111,10 @@ static void page_goto(page_t p) {
             }
         }
     }
+    // I35:荒野行进方向记忆——场景(战斗/地点)结束回地图页时,焦点落回
+    // 上次走的方向(原一律重置 0=东:往西走被场景打断后按确定反向东走)
+    if (p == PG_MAP && s.game.in_wilderness && s.last_dir >= 0)
+        s.focus = s.last_dir;
     if (!row_enabled(0)) focus_move(1);   // 首行禁用则落到首个可用行
     s.dirty = true;
 }
@@ -2246,6 +2251,7 @@ static void list_action(int idx) {
                         // 焦点回"东"行:不重置会停在出发行位置(远征态=北行),
                         // 玩家第一按就反向(I13)
                         s.focus = 0;
+                        s.last_dir = -1;   // 新一趟远征:方向记忆清零(I35)
                         s.save_pending = true;
                     } else {
                         log_push("先整备干肉(库→带)");
@@ -2260,6 +2266,7 @@ static void list_action(int idx) {
                 static const int dirs[4][2] = {
                     {1, 0}, {0, 1}, {-1, 0}, {0, -1}
                 };
+                s.last_dir = (int8_t)idx;   // I35:行进方向记忆(场景回页恢复焦点)
                 uint64_t flags_before = s.game.flags;
                 dr_move_result_t r =
                     dr_world_move(&s_world, &s.game, dirs[idx][0], dirs[idx][1]);
@@ -2279,10 +2286,12 @@ static void list_action(int idx) {
                         log_push("你倒在了荒野里,物资全失");
                         toast("倒下了,物资全失");
                         s.embark_cd_ms = now_ms + 120u * 1000u;
+                        s.last_dir = -1;   // 远征终结:方向记忆清零(I35)
                         s.save_pending = true;
                         break;
                     case DR_MOVE_HOME: {
                         log_push("回到了小屋");
+                        s.last_dir = -1;   // 回家:方向记忆清零(I35)
                         if (!(flags_before & ((uint64_t)1u << DR_FLAG_IRON_MINE)) &&
                             (s.game.flags & ((uint64_t)1u << DR_FLAG_IRON_MINE)))
                             log_push("可以派村民去采铁矿了");
@@ -3194,6 +3203,7 @@ void darkroom_app_enter(void) {
     s.village_adj = -1; // -1 = 村庄页未进入人数调节
     s.outfit_adj = -1;  // -1 = 未在整备调配
     s.fight_return = PG_MAP;   // 战斗结束默认回荒野页(执行者战临时改 PG_SHIP)
+    s.last_dir = -1;           // 方向记忆(首次进荒野前为空,I35)
     s.boot_ms = (uint32_t)(esp_timer_get_time() / 1000);
     s.last_input_ms = s.boot_ms;   // 熄屏计时与开机防抖同基准
 
@@ -3341,10 +3351,12 @@ void dr_debug_set_ship(uint8_t exec, uint8_t hull, uint8_t thr, uint32_t alloy) 
 
 // 模拟器诊断:打印对象树关键状态(仅主机构建使用)
 void dr_debug_dump(void) {
-    ESP_LOGI(TAG, "dump page=%d focus=%d wood=%lu pop=%u fire=%u",
+    ESP_LOGI(TAG, "dump page=%d focus=%d wood=%lu pop=%u fire=%u hero=%u,%u dir=%d wild=%u",
              (int)s.page, s.focus,
              (unsigned long)s.game.res[DR_RES_WOOD],
-             s.game.population, s.game.fire_lv);
+             s.game.population, s.game.fire_lv,
+             s.game.hero_x, s.game.hero_y, (int)s.last_dir,
+             s.game.in_wilderness);
 }
 
 // 模拟器诊断:轮播下一页(SIM_PAGE_SWEEP 用)
