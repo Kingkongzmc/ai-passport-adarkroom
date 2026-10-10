@@ -1258,7 +1258,7 @@ static void render_map(void) {
         lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_pos(s_hint, 0, 256);
         if (adj)
-            lv_label_set_text(s_hint, "上下调整 长按=5/完成 确定下一项");
+            lv_label_set_text(s_hint, "上下调整(长按=±5) 确定完成");
         else if (s.game.food == 0)
             lv_label_set_text(s_hint, "整备干肉后才能出发(库→带)");
         else
@@ -2962,14 +2962,15 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
 
     if (ev == BSP_BTN_PRESS) {
         // 幽灵键窗已在函数头统一鉴别(I33),这里直接进动作分发
-        // 出发整备调配:上/下=±1,确定=切下一项(干肉→药→…→流星锤→完成)
+        // 出发整备调配:上/下=±1(长按=±5),确定=完成退出(与村庄人数调节
+        // 同款;原"确定切下一项"在 6 携带行下退出要连按 6 下——真机 I36)
         if (s.page == PG_MAP && s.outfit_adj >= 0) {
             static const uint8_t outfit_res[6] = {
                 DR_RES_FOOD, DR_RES_MEDICINE, DR_RES_BULLETS,
                 DR_RES_ENERGY_CELL, DR_RES_GRENADE, DR_RES_BOLAS
             };
             if (btn == BSP_BTN_OK) {
-                s.outfit_adj = (s.outfit_adj >= 5) ? -1 : s.outfit_adj + 1;
+                s.outfit_adj = -1;
                 s.dirty = true;
                 return;
             }
@@ -3177,8 +3178,8 @@ static void key_task(void *arg) {
     while (!s_key_quit) {
         if (xQueueReceive(s_key_queue, &ke, pdMS_TO_TICKS(200)) == pdTRUE) {
             // I33 取证:每个按键事件附当时分压读数(仅日志,零行为变更;定位后撤)
-            ESP_LOGI(TAG, "diag key btn=%d ev=%d mv=%d",
-                     (int)ke.btn, (int)ke.ev, bsp_button_read_mv());
+            ESP_LOGI(TAG, "diag key btn=%d ev=%d mv=%d page=%d",
+                     (int)ke.btn, (int)ke.ev, bsp_button_read_mv(), (int)s.page);
             if (bsp_lvgl_lock(250)) {
                 handle_key(ke.btn, ke.ev, ke.ms);
                 render();
@@ -3349,10 +3350,17 @@ void dr_debug_set_ship(uint8_t exec, uint8_t hull, uint8_t thr, uint32_t alloy) 
     page_goto(PG_SHIP);
 }
 
+// 模拟器诊断:整备页直达(仅主机构建;SIM_OUTFIT=1:置罗盘开荒野页签,
+// 未远征态 = 出发整备视图),供整备调节按键实测(I36)。
+void dr_debug_set_outfit(void) {
+    s.game.flags |= (uint64_t)1u << DR_FLAG_COMPASS;
+    page_goto(PG_MAP);
+}
+
 // 模拟器诊断:打印对象树关键状态(仅主机构建使用)
 void dr_debug_dump(void) {
-    ESP_LOGI(TAG, "dump page=%d focus=%d wood=%lu pop=%u fire=%u hero=%u,%u dir=%d wild=%u",
-             (int)s.page, s.focus,
+    ESP_LOGI(TAG, "dump page=%d focus=%d adj=%d wood=%lu pop=%u fire=%u hero=%u,%u dir=%d wild=%u",
+             (int)s.page, s.focus, (int)s.outfit_adj,
              (unsigned long)s.game.res[DR_RES_WOOD],
              s.game.population, s.game.fire_lv,
              s.game.hero_x, s.game.hero_y, (int)s.last_dir,

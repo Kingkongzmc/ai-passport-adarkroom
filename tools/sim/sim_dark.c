@@ -243,6 +243,8 @@ int main(int argc, char **argv) {
         sscanf(sim_ship, "%u,%u,%u,%u", &ex, &hu, &th, &al);
         dr_debug_set_ship((uint8_t)ex, (uint8_t)hu, (uint8_t)th, al);
     }
+    // SIM_OUTFIT=1:整备页直达(未远征态),整备调节按键实测(I36)
+    if (getenv("SIM_OUTFIT")) dr_debug_set_outfit();
 
     for (int f = 0; f < frames; f++) {
         for (int k = 0; k < s_key_count; k++)
