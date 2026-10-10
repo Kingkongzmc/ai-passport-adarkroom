@@ -143,6 +143,7 @@ static struct {
     bool imp_failed;           // 校验失败态(确定=清空重来,长按=退出)
     char toast[40];            // 就地结果提示(覆盖当前页提示行,到期还原)
     uint32_t toast_until_ms;
+    uint32_t toast_col;        // 提示条颜色(T4:金=反馈,红=威胁)
     dr_game_t game;
     dr_rules_rt_t rules_rt;
     dr_event_session_t ev_sess;
@@ -187,6 +188,7 @@ static lv_obj_t *s_legchip[LEG_KINDS], *s_legtxt[LEG_KINDS];
 #define ROOM_CELLS 9
 static lv_obj_t *s_room[ROOM_CELLS];
 static lv_obj_t *s_hp[2], *s_hpfill[2];
+static lv_obj_t *s_hptick[6];   // 血条 25/50/75% 刻度(美化 T4;子对象随条显隐)
 
 // 存档码页(M7):导出 6 字符大间隔 + 页码行;导入 3 行回看(每行 6 字符)
 #define CODE_COLS 6
@@ -202,24 +204,38 @@ static volatile bool s_key_quit;
 #define LOG_LINES 8        // 主页日志环形缓冲条数
 static char s_logs[LOG_LINES][48];
 static int s_log_cnt;
+// 语义主语色(美化 T4):并行会话内标记,NVS 不持久——重启恢复的旧日志
+// 一律按系统色渲染,打包格式("DLO2")不动
+#define LOG_SYS 0u
+#define LOG_ME  1u
+#define LOG_FOE 2u
+static uint8_t s_logs_origin[LOG_LINES];
 
-static void log_push(const char *text) {
-    if (s_log_cnt == LOG_LINES)
+static void log_push_o(const char *text, uint8_t origin) {
+    if (s_log_cnt == LOG_LINES) {
         memmove(s_logs[0], s_logs[1], sizeof(s_logs) - sizeof(s_logs[0]));
-    else
+        memmove(s_logs_origin, s_logs_origin + 1, LOG_LINES - 1);
+    } else
         s_log_cnt++;
     snprintf(s_logs[s_log_cnt - 1], sizeof(s_logs[0]), "%s", text);
+    s_logs_origin[s_log_cnt - 1] = origin;
     s.dirty = true;
 }
 
-// 就地结果提示:把当前页底部提示行覆盖为金色文字(约 2s,tick 到时还原)。
+static void log_push(const char *text) { log_push_o(text, LOG_SYS); }
+
+// 就地结果提示:把当前页底部提示行覆盖为彩色文字(约 2s,tick 到时还原)。
 // 与 log_push 并用——即时反馈进提示行,历史留主页日志。
 // 隐藏提示行的页面(主页有日志区/弹窗有正文)不显示,静默降级为仅日志。
-static void toast(const char *txt) {
+// T4:常规反馈金,危险类(死亡/战败/断供/深睡预告)红——红=威胁,金=反馈
+static void toast_c(const char *txt, uint32_t col) {
     snprintf(s.toast, sizeof(s.toast), "%s", txt);
+    s.toast_col = col;
     s.toast_until_ms = (uint32_t)(esp_timer_get_time() / 1000) + 2000u;
     s.dirty = true;
 }
+
+static void toast(const char *txt) { toast_c(txt, COL_GOLD); }
 
 // ---- 日志随档持久化(独立 NVS 键 dr_log;重启后主页日志原样恢复) ----
 // 载荷 = 行数(1B) + 行数×48B(环形缓冲恒紧凑在 [0,cnt))。坏键 = 空日志。
@@ -258,6 +274,7 @@ static bool log_restore(const void *buf, size_t len) {
     for (int i = 0; i < cnt; i++)    // 行尾兜底 NUL,防越界渲染
         s_logs[i][sizeof(s_logs[0]) - 1] = '\0';
     s_log_cnt = cnt;
+    memset(s_logs_origin, LOG_SYS, sizeof(s_logs_origin));   // 旧档无主语色
     return true;
 }
 
@@ -710,6 +727,17 @@ static void build_ui(void) {
         lv_obj_set_style_border_width(s_hpfill[i], 0, 0);
         lv_obj_set_style_pad_all(s_hpfill[i], 0, 0);
     }
+    // 血条 25/50/75% 刻度(T4):面板色 1px 分隔,分段条质感;子对象随条显隐
+    for (int i = 0; i < 6; i++) {
+        s_hptick[i] = lv_obj_create(s_hp[i / 3]);
+        lv_obj_set_pos(s_hptick[i], 1 + (196 / 4) * ((i % 3) + 1), 1);
+        lv_obj_set_size(s_hptick[i], 1, 8);
+        lv_obj_set_style_radius(s_hptick[i], 0, 0);
+        lv_obj_set_style_bg_color(s_hptick[i], lv_color_hex(COL_PANEL), 0);
+        lv_obj_set_style_border_width(s_hptick[i], 0, 0);
+        lv_obj_set_style_pad_all(s_hptick[i], 0, 0);
+        lv_obj_clear_flag(s_hptick[i], LV_OBJ_FLAG_SCROLLABLE);
+    }
 
     lv_screen_load(s_scr);
     lv_display_add_event_cb(lv_display_get_default(), on_flush_finish,
@@ -792,6 +820,7 @@ static void cell_base(int i, int x, int y) {
     lv_obj_set_pos(s_cells[i], x, y);
     lv_obj_set_size(s_cells[i], 46, 15);
     lv_obj_set_style_text_font(s_cells[i], &dr_font_12, 0);
+    lv_obj_set_style_text_color(s_cells[i], lv_color_hex(COL_TEXT), 0);
 }
 
 // 资源格文字:"木 12.3k"——数量经紧凑化(46px 格 5 位数起必截断,I1)
@@ -810,6 +839,9 @@ static void render_cells(void) {
     cell_res(1, "人", s.game.population);
     cell_res(2, "阱", s.game.building_lv[DR_BLD_TRAP]);
     cell_res(3, "木", s.game.res[DR_RES_WOOD]);
+    // 木=0 → 点不着火,直接原因上屏(T4,同远征断供红格先例)
+    lv_obj_set_style_text_color(s_cells[3],
+        lv_color_hex(s.game.res[DR_RES_WOOD] ? COL_TEXT : COL_ENEMY), 0);
     cell_res(4, "毛", s.game.res[DR_RES_FUR]);
     cell_res(5, "肉", s.game.res[DR_RES_MEAT]);
     cell_res(6, "诱", s.game.res[DR_RES_BAIT]);
@@ -820,14 +852,21 @@ static void render_cells(void) {
 // 行数随动作行数自适应:3 个动作时更多行,4 个及以上时减少一行。
 static lv_obj_t *s_loglines[LOG_VIS];
 
-static lv_color_t log_fade(int i, int n) {
-    // i=0 最新:全亮 COL_TEXT;越旧越接近 COL_BG,最深 ~67% 融入背景
+// 第 k 新条目的语义基色(T4):我=蓝/敌=红/系统=白
+static uint32_t log_base(int k) {
+    int idx = s_log_cnt - 1 - k;
+    uint8_t o = (idx >= 0) ? s_logs_origin[idx] : (uint8_t)LOG_SYS;
+    return (o == LOG_ME) ? COL_ME : (o == LOG_FOE) ? COL_ENEMY : COL_TEXT;
+}
+
+// base 色向 COL_BG 渐隐(i=0 最新全亮,越旧越融入背景 ~67%)
+static lv_color_t log_fade(int i, int n, uint32_t base) {
     int t = (n <= 1) ? 0 : (i * 170) / (n - 1);
-    uint32_t r = ((COL_TEXT >> 16) & 0xFF) * (255 - t) / 255 +
+    uint32_t r = ((base >> 16) & 0xFF) * (255 - t) / 255 +
                  ((COL_BG >> 16) & 0xFF) * t / 255;
-    uint32_t g = ((COL_TEXT >> 8) & 0xFF) * (255 - t) / 255 +
+    uint32_t g = ((base >> 8) & 0xFF) * (255 - t) / 255 +
                  ((COL_BG >> 8) & 0xFF) * t / 255;
-    uint32_t b = (COL_TEXT & 0xFF) * (255 - t) / 255 +
+    uint32_t b = (base & 0xFF) * (255 - t) / 255 +
                  (COL_BG & 0xFF) * t / 255;
     return lv_color_hex((r << 16) | (g << 8) | b);
 }
@@ -854,7 +893,7 @@ static void render_home_log(int n_acts, int act_top) {
         lv_obj_set_pos(l, 0, 90 + i * pitch);
         lv_obj_clear_flag(l, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(l, e);
-        lv_obj_set_style_text_color(l, log_fade(i, show), 0);
+        lv_obj_set_style_text_color(l, log_fade(i, show, log_base(i)), 0);
     }
 }
 
@@ -1562,6 +1601,9 @@ static void render_combat(void) {
     lv_label_set_text_fmt(s_cells[1], "你(%s) HP %u/%u",
                           weapon_name(s.game.weapon_lv),
                           s.game.hero_hp, s.game.hero_hp_max);
+    // 名行语义色(T4):敌红/我蓝
+    lv_obj_set_style_text_color(s_cells[0], lv_color_hex(COL_ENEMY), 0);
+    lv_obj_set_style_text_color(s_cells[1], lv_color_hex(COL_ME), 0);
     uint16_t ehp = dr_world_fight_hp(&s_world), ehp_max = dr_world_fight_hp_max(&s_world);
     for (int i = 0; i < 2; i++) {
         lv_obj_clear_flag(s_hp[i], LV_OBJ_FLAG_HIDDEN);
@@ -1570,6 +1612,18 @@ static void render_combat(void) {
             ? (ehp_max ? (int)(198u * ehp / ehp_max) : 0)
             : (int)(198u * s.game.hero_hp / (s.game.hero_hp_max ? s.game.hero_hp_max : 1));
         lv_obj_set_size(s_hpfill[i], w, 8);
+        // 血量语义色(T4):敌恒红;我 >40% 蓝 / ≤40% 琥珀 / ≤15% 红
+        if (i == 0) {
+            lv_obj_set_style_bg_color(s_hpfill[i],
+                                      lv_color_hex(COL_ENEMY), 0);
+        } else {
+            int pct = s.game.hero_hp_max
+                ? (int)((uint32_t)s.game.hero_hp * 100u / s.game.hero_hp_max)
+                : 0;
+            lv_obj_set_style_bg_color(s_hpfill[i],
+                lv_color_hex(pct <= 15 ? COL_ENEMY
+                                       : pct <= 40 ? COL_AMBER : COL_ME), 0);
+        }
     }
     // 中段战报:最近 3 条战斗日志(血条与动作行之间旧版整段留白 80px,I18)
     for (int i = 0; i < 3; i++) {
@@ -1579,7 +1633,7 @@ static void render_combat(void) {
         lv_obj_set_pos(l, 0, 100 + i * 15);
         lv_obj_clear_flag(l, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(l, e);
-        lv_obj_set_style_text_color(l, log_fade(i, 3), 0);
+        lv_obj_set_style_text_color(l, log_fade(i, 3, log_base(i)), 0);
     }
     for (int i = 3; i < LOG_VIS; i++)
         lv_obj_add_flag(s_loglines[i], LV_OBJ_FLAG_HIDDEN);
@@ -2182,7 +2236,7 @@ static void render(void) {
     // 到期由 tick 清除并触发整页重画,恢复各页自己的提示文案与暗色)
     if (s.toast[0] && !lv_obj_has_flag(s_hint, LV_OBJ_FLAG_HIDDEN)) {
         lv_label_set_text(s_hint, s.toast);
-        lv_obj_set_style_text_color(s_hint, lv_color_hex(COL_GOLD), 0);
+        lv_obj_set_style_text_color(s_hint, lv_color_hex(s.toast_col), 0);
     }
 }
 
@@ -2547,7 +2601,7 @@ static void list_action(int idx) {
                         s.save_pending = true;
                     } else {
                         log_push("先整备干肉(库→带)");
-                        toast("先整备干肉");
+                        toast_c("先整备干肉", COL_ENEMY);
                     }
                     break;
                 }
@@ -2568,15 +2622,15 @@ static void list_action(int idx) {
                         snprintf(line, sizeof(line), "遭遇了%s!",
                                  dr_enemy_name(dr_world_fight_enemy(&s_world,
                                                                     &s.game)));
-                        log_push(line);
+                        log_push_o(line, LOG_FOE);
                         page_goto(PG_COMBAT);
                         break;
                     }
                     case DR_MOVE_WARN_THIRST: log_push("口渴难忍"); break;
                     case DR_MOVE_WARN_HUNGER: log_push("饥饿来袭"); break;
                     case DR_MOVE_DEATH:
-                        log_push("你倒在了荒野里,物资全失");
-                        toast("倒下了,物资全失");
+                        log_push_o("你倒在了荒野里,物资全失", LOG_FOE);
+                        toast_c("倒下了,物资全失", COL_ENEMY);
                         s.embark_cd_ms = now_ms + 120u * 1000u;
                         s.last_dir = -1;   // 远征终结:方向记忆清零(I35)
                         s.save_pending = true;
@@ -2667,7 +2721,7 @@ static void list_action(int idx) {
             (void)en;
             switch (r) {
                 case DR_FIGHT_WIN:
-                    log_push("击败了它!战利品入包");
+                    log_push_o("击败了它!战利品入包", LOG_ME);
                     s.save_pending = true;
                     if (s.fight_return == PG_SHIP) {
                         // 执行者被击溃:制造台上线(与和解同口径解锁)
@@ -2681,8 +2735,8 @@ static void list_action(int idx) {
                     }
                     break;
                 case DR_FIGHT_LOSE:
-                    log_push("你被它打倒了,物资全失");
-                    toast("战败,物资全失");
+                    log_push_o("你被它打倒了,物资全失", LOG_FOE);
+                    toast_c("战败,物资全失", COL_ENEMY);
                     s.embark_cd_ms = (uint32_t)(esp_timer_get_time() / 1000) +
                                      120u * 1000u;
                     s.save_pending = true;
@@ -2695,7 +2749,7 @@ static void list_action(int idx) {
                     }
                     break;
                 case DR_FIGHT_FLED:
-                    log_push("逃掉了");
+                    log_push_o("逃掉了", LOG_ME);
                     if (s.fight_return == PG_SHIP) {
                         s.fight_return = PG_MAP;
                         page_goto(PG_HOME);   // 逃离星舰,执行者仍守着舱门
@@ -2704,15 +2758,15 @@ static void list_action(int idx) {
                     }
                     break;
                 case DR_FIGHT_NONE:
-                    if (act == 3) { log_push("没有干肉了"); toast("没有干肉了"); }
-                    if (act == 4) { log_push("没有药了");   toast("没有药了"); }
+                    if (act == 3) { log_push("没有干肉了"); toast_c("没有干肉了", COL_ENEMY); }
+                    if (act == 4) { log_push("没有药了");   toast_c("没有药了", COL_ENEMY); }
                     break;
-                case DR_FIGHT_STUN:       log_push("它被流星锤缠住了"); break;
-                case DR_FIGHT_MISS:       log_push("挥空了"); break;
-                case DR_FIGHT_HIT:        log_push("命中!"); break;
-                case DR_FIGHT_ENEMY_HIT:  log_push("它反击得手"); break;
-                case DR_FIGHT_ENEMY_MISS: log_push("它扑了个空"); break;
-                case DR_FIGHT_ENEMY_SKIP: log_push("它蓄势未发"); break;
+                case DR_FIGHT_STUN:       log_push_o("它被流星锤缠住了", LOG_FOE); break;
+                case DR_FIGHT_MISS:       log_push_o("挥空了", LOG_ME); break;
+                case DR_FIGHT_HIT:        log_push_o("命中!", LOG_ME); break;
+                case DR_FIGHT_ENEMY_HIT:  log_push_o("它反击得手", LOG_FOE); break;
+                case DR_FIGHT_ENEMY_MISS: log_push_o("它扑了个空", LOG_FOE); break;
+                case DR_FIGHT_ENEMY_SKIP: log_push_o("它蓄势未发", LOG_FOE); break;
                 default: break;
             }
             s.dirty = true;
@@ -2974,7 +3028,7 @@ static void handle_ok(void) {
                 s_world.fight_stun = 0;
                 s_world.fight_from_city = false;
                 s.fight_return = PG_SHIP;
-                log_push("守卫的独眼亮起红光,扑了过来!");
+                    log_push_o("守卫的独眼亮起红光,扑了过来!", LOG_FOE);
                 page_goto(PG_COMBAT);
                 break;
             }
@@ -3078,13 +3132,18 @@ static void tick(lv_timer_t *t) {
         last_batt_ms = now_ms;
         int soc = bsp_battery_soc();
         // 标题页顶栏留白,电量只在游戏页刷新(§8.2"常显":含荒野/战斗等全页)
-        if (soc >= 0 && s.page != PG_TITLE) lv_label_set_text_fmt(s_batt, "%d%%", soc);
+        if (soc >= 0 && s.page != PG_TITLE) {
+            lv_label_set_text_fmt(s_batt, "%d%%", soc);
+            // 低电红字(T4,与电量保护共存:背光/深睡管行为,红字管可见性)
+            lv_obj_set_style_text_color(s_batt,
+                lv_color_hex(soc <= DR_BATT_LOW_PCT ? COL_ENEMY : COL_DIM), 0);
+        }
         // 电量保护(§8.2):≤20% 背光减半+提示一次;≤10% 硬保护——立即存档
         // +直接 L3 深睡(不受弹屏挂起限制,跳过 L1/L2 计时)。toast 先行,
         // 1.5s 后由 key_task 执行深睡序列(渲染任务自由跑,提示可见)。
         if (soc >= 0 && !s.deep_req) {
             if (soc <= DR_BATT_CRIT_PCT) {
-                toast("即将沉睡");
+                toast_c("即将沉睡", COL_ENEMY);
                 s.deep_req = true;
             } else if (soc <= DR_BATT_LOW_PCT) {
                 if (!s.bl_dim) {
