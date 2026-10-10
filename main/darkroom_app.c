@@ -57,6 +57,17 @@ LV_FONT_DECLARE(dr_font_24);
 #define COL_LOCK   0x57534E
 #define COL_ME     0x66B2FF
 #define COL_ENEMY  0xE43B2F
+// 美化 T1/T2:反色墨字 + 中性分隔线 + 页面 accent(自地形色板提亮,暗于金)
+#define COL_INK    0x0D0D0D   // 焦点反色行上的文字色(=COL_BG)
+#define COL_RULE   0x33302C   // 中性分隔线/地图格边(原散落字面量收编)
+#define COL_AMBER  0xE08A3C   // HP 中量段/标题页火光带/主页 accent
+#define ACCENT_HOME   0xE08A3C   // 主页:火光暖橙
+#define ACCENT_FOREST 0x7FB55C   // 村庄/森林:森林 0x2E5E1E 提亮
+#define ACCENT_WILD   0xC7A87E   // 荒野:荒地 0x967850 提亮
+#define ACCENT_BUILD  0xC9986B   // 建造/老屋:0x965F37 提亮
+#define ACCENT_TRADE  0x6FC9C9   // 贸易:哨站 0x9AE8E8 压暗半档
+#define ACCENT_CRAFT  0xA9A9B5   // 制造/制造台:铁矿 0x707078 提亮
+#define ACCENT_SHIP   0xD49BE8   // 星舰:0xC060D8 提亮(第四幕身份色)
 
 // ---- 布局常量(全屏面板 + 居中内容区) ----
 #define PAN_W   240
@@ -150,6 +161,7 @@ static lv_obj_t *s_tabs[5], *s_tablbl[5];   // M5:第 4 页签=星舰(原版 An 
 static lv_obj_t *s_cells[8];
 static lv_obj_t *s_loglines[LOG_VIS];
 static lv_obj_t *s_hint;
+static lv_obj_t *s_rule, *s_tick;   // 页头规则线+accent 短色条(T2,最底层)
 static lv_obj_t *s_strack, *s_sthumb;   // 滚动指示条:右缘轨道+滑块(村庄/制造窗)
 // 动作行:容器 + 冷却填充 + 箭头 + 文字(主页/战斗/弹窗选项共用骨架)
 typedef struct {
@@ -389,6 +401,25 @@ static void build_ui(void) {
     lv_obj_clear_flag(s_content, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scrollbar_mode(s_content, LV_SCROLLBAR_MODE_OFF);
 
+    // 页头规则线+accent 短色条(T2):最先创建=最底层,压在日志/列表行之下;
+    // 位置与显隐由各页渲染时全量重写(clear_scene 统一藏)
+    s_rule = lv_obj_create(s_content);
+    lv_obj_set_pos(s_rule, 0, 44);
+    lv_obj_set_size(s_rule, 198, 1);
+    lv_obj_set_style_radius(s_rule, 0, 0);
+    lv_obj_set_style_bg_color(s_rule, lv_color_hex(COL_RULE), 0);
+    lv_obj_set_style_border_width(s_rule, 0, 0);
+    lv_obj_set_style_pad_all(s_rule, 0, 0);
+    lv_obj_clear_flag(s_rule, LV_OBJ_FLAG_SCROLLABLE);
+    s_tick = lv_obj_create(s_content);
+    lv_obj_set_pos(s_tick, 0, 44);
+    lv_obj_set_size(s_tick, 26, 1);
+    lv_obj_set_style_radius(s_tick, 0, 0);
+    lv_obj_set_style_bg_color(s_tick, lv_color_hex(COL_GOLD), 0);
+    lv_obj_set_style_border_width(s_tick, 0, 0);
+    lv_obj_set_style_pad_all(s_tick, 0, 0);
+    lv_obj_clear_flag(s_tick, LV_OBJ_FLAG_SCROLLABLE);
+
     // 顶栏:标题(0,0,110,20 f12) + 电池(150,2,48,15 f12 右对齐)
     s_topbar = label_new(s_content, &dr_font_12, lv_color_hex(COL_GOLD), 0, 0, 110, 20);
     lv_label_set_text(s_topbar, "小黑屋");
@@ -406,7 +437,7 @@ static void build_ui(void) {
         lv_obj_set_style_border_width(s_tabs[i], 0, 0);
         lv_obj_set_style_border_side(s_tabs[i], LV_BORDER_SIDE_BOTTOM, 0);
         lv_obj_set_style_border_width(s_tabs[i], 1, 0);
-        lv_obj_set_style_border_color(s_tabs[i], lv_color_hex(0x3A3A44), 0);
+        lv_obj_set_style_border_color(s_tabs[i], lv_color_hex(COL_CD), 0);
         lv_obj_clear_flag(s_tabs[i], LV_OBJ_FLAG_SCROLLABLE);
         s_tablbl[i] = lv_label_create(s_tabs[i]);
         lv_obj_center(s_tablbl[i]);
@@ -592,7 +623,7 @@ static void build_ui(void) {
         lv_obj_set_size(s_map[i], 10, 10);
         lv_obj_set_style_radius(s_map[i], 0, 0);
         lv_obj_set_style_border_width(s_map[i], 1, 0);
-        lv_obj_set_style_border_color(s_map[i], lv_color_hex(0x33302C), 0);
+        lv_obj_set_style_border_color(s_map[i], lv_color_hex(COL_RULE), 0);
         lv_obj_set_style_bg_color(s_map[i], lv_color_hex(COL_BG), 0);
         lv_obj_set_style_pad_all(s_map[i], 0, 0);
     }
@@ -635,7 +666,7 @@ static void build_ui(void) {
         lv_obj_set_size(s_room[i], 26, 26);
         lv_obj_set_style_radius(s_room[i], 0, 0);
         lv_obj_set_style_border_width(s_room[i], 1, 0);
-        lv_obj_set_style_border_color(s_room[i], lv_color_hex(0x33302C), 0);
+        lv_obj_set_style_border_color(s_room[i], lv_color_hex(COL_RULE), 0);
         lv_obj_set_style_bg_color(s_room[i], lv_color_hex(COL_BG), 0);
         lv_obj_set_style_pad_all(s_room[i], 0, 0);
     }
@@ -668,8 +699,37 @@ static void build_ui(void) {
 // ===================================================================
 // 渲染辅助
 // ===================================================================
-static void render_topbar(const char *title) {
+static void render_topbar_c(const char *title, uint32_t accent) {
     lv_label_set_text(s_topbar, title);
+    lv_obj_set_style_text_color(s_topbar, lv_color_hex(accent), 0);
+}
+
+// 默认金色标题(仪式页:标题/升空/结局豁免 accent)
+static void render_topbar(const char *title) {
+    render_topbar_c(title, COL_GOLD);
+}
+
+// 地点页动态 accent(与地图/图例同源,提亮至文字可读档;T2)
+static uint32_t ruin_accent(void) {
+    switch (dr_world_location(&s_world)) {
+        case DR_WT_HOUSE: return ACCENT_BUILD;
+        case DR_WT_CAVE:  return 0x8AA0E8;
+        case DR_WT_TOWN:  return 0xF29E9E;
+        case DR_WT_CITY:  return 0xA488D8;
+        default:          return COL_DIM;
+    }
+}
+
+// 页头规则线+左端 accent 短色条(T2):仅无页签的列表页,显隐由 clear_scene
+// 统一藏、各页按需调用;tick 画在 rule 左端同带(后创建者在上)
+static void render_rule(int y, int h, uint32_t accent) {
+    lv_obj_clear_flag(s_rule, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(s_rule, 0, y);
+    lv_obj_set_size(s_rule, 198, h);
+    lv_obj_clear_flag(s_tick, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_pos(s_tick, 0, y);
+    lv_obj_set_size(s_tick, 26, h);
+    lv_obj_set_style_bg_color(s_tick, lv_color_hex(accent), 0);
 }
 
 // 页签渲染:active=当前页(金色下划线),nav=光标所在 tab(-1=不在页签区)。
@@ -684,17 +744,24 @@ static void render_tabs(int active, bool village_ok, bool wild_ok, int nav) {
         bool cur = (i == nav);
         bool lock = (i == 1 && !village_ok) || (i == 2 && !wild_ok) ||
                     (i == 3 && !ship_ok);
+        // T1:光标页签=金底墨字色块;锁定光标不反色,保留锁灰描边以示可落
+        bool inv = cur && !lock;
+        lv_obj_set_style_bg_opa(s_tabs[i],
+                                inv ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        if (inv)
+            lv_obj_set_style_bg_color(s_tabs[i], lv_color_hex(COL_GOLD), 0);
         lv_obj_set_style_text_color(s_tablbl[i],
-            lv_color_hex(lock ? COL_LOCK : (on || cur) ? COL_GOLD : COL_DIM), 0);
+            lv_color_hex(inv ? COL_INK
+                         : lock ? COL_LOCK
+                         : (on || cur) ? COL_GOLD : COL_DIM), 0);
         lv_obj_set_style_border_color(s_tabs[i],
             lv_color_hex((cur && lock) ? COL_LOCK
-                         : (on || cur) ? COL_GOLD : 0x3A3A44), 0);
+                         : (on || cur) ? COL_GOLD : COL_CD), 0);
         lv_obj_set_style_border_width(s_tabs[i],
             on ? 2 : (cur ? 2 : 1), 0);
-        // tab 光标保留完整边框(选项行不用框);锁定项光标用锁灰
-        lv_obj_set_style_outline_color(s_tabs[i],
-            lv_color_hex((cur && lock) ? COL_LOCK : COL_GOLD), 0);
-        lv_obj_set_style_outline_width(s_tabs[i], cur ? 1 : 0, 0);
+        lv_obj_set_style_outline_color(s_tabs[i], lv_color_hex(COL_LOCK), 0);
+        lv_obj_set_style_outline_width(s_tabs[i],
+                                       (cur && lock) ? 1 : 0, 0);
         lv_obj_set_style_outline_pad(s_tabs[i], 0, 0);
     }
 }
@@ -771,12 +838,22 @@ static void render_home_log(int n_acts, int act_top) {
     }
 }
 
-// 动作行:文字 + 焦点 + 冷却填充百分比(0=就绪无底色)
+// 动作行:文字 + 焦点 + 冷却填充百分比(0=就绪无底色)。
+// 焦点态(T1):整行反色金底墨字;冷却中退为 1px 金描边(墨字压暗条不可读)
 static void set_act(actrow_t *a, const char *text, bool focus, int fill_pct) {
     lv_label_set_text(a->arrow, focus ? ">" : "");
     lv_label_set_text(a->lbl, text);
+    bool inv = focus && fill_pct <= 0;
+    lv_obj_set_style_bg_opa(a->row, inv ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    if (inv)
+        lv_obj_set_style_bg_color(a->row, lv_color_hex(COL_GOLD), 0);
+    lv_obj_set_style_border_width(a->row, (focus && !inv) ? 1 : 0, 0);
+    if (focus && !inv)
+        lv_obj_set_style_border_color(a->row, lv_color_hex(COL_GOLD), 0);
+    lv_obj_set_style_text_color(a->arrow,
+                                lv_color_hex(inv ? COL_INK : COL_GOLD), 0);
     lv_obj_set_style_text_color(a->lbl,
-        lv_color_hex(focus ? COL_GOLD : COL_TEXT), 0);
+        lv_color_hex(inv ? COL_INK : focus ? COL_GOLD : COL_TEXT), 0);
     if (fill_pct > 0) {
         lv_obj_clear_flag(a->fill, LV_OBJ_FLAG_HIDDEN);
         // 铺满所在行内宽(主页动作行 198 / 弹窗选项行 172),
@@ -792,18 +869,25 @@ static void hide_acts(void) {
     for (int i = 0; i < ACT_ROWS; i++) lv_obj_add_flag(s_acts[i].row, LV_OBJ_FLAG_HIDDEN);
 }
 
-// 列表行:t 名称(focus 金色/lock 灰) v 值(右对齐)
+// 列表行:t 名称(focus 反色墨字/lock 灰) v 值(右对齐)。
+// T1:焦点整行反色金底墨字;锁定行永不反色
 static void set_row(int i, int y, const char *t, const char *v,
                     bool focus, bool lock) {
     listrow_t *r = &s_list[i];
     lv_obj_set_pos(r->row, 0, y);
     lv_obj_clear_flag(r->row, LV_OBJ_FLAG_HIDDEN);
+    bool inv = focus && !lock;
+    lv_obj_set_style_bg_opa(r->row, inv ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    if (inv)
+        lv_obj_set_style_bg_color(r->row, lv_color_hex(COL_GOLD), 0);
     lv_label_set_text(r->mark, focus ? ">" : "");
     lv_label_set_text(r->t, t);
     lv_obj_set_style_text_color(r->t,
-        lv_color_hex(focus ? COL_GOLD : lock ? COL_LOCK : COL_TEXT), 0);
+        lv_color_hex(inv ? COL_INK
+                         : focus ? COL_GOLD : lock ? COL_LOCK : COL_TEXT), 0);
     lv_label_set_text(r->v, v);
-    lv_obj_set_style_text_color(r->v, lv_color_hex(lock ? COL_LOCK : COL_DIM), 0);
+    lv_obj_set_style_text_color(r->v,
+        lv_color_hex(inv ? COL_INK : lock ? COL_LOCK : COL_DIM), 0);
 }
 
 static void hide_rows(void) {
@@ -818,6 +902,8 @@ static void clear_scene(void) {
     for (int i = 0; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
     for (int i = 0; i < LOG_VIS; i++) lv_obj_add_flag(s_loglines[i], LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_rule, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_tick, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_strack, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_sthumb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_t_big, LV_OBJ_FLAG_HIDDEN);
@@ -904,7 +990,7 @@ static int stoke_pct(uint32_t now_ms) {
 }
 
 static void render_home(uint32_t now_ms) {
-    render_topbar("小黑屋");
+    render_topbar_c("小黑屋", ACCENT_HOME);
     render_tabs(0, forest_open(), nav_tab_enabled(2), s.nav_focus);
     render_cells();
     lv_obj_add_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
@@ -964,7 +1050,8 @@ static uint32_t bld_comp_cost(uint8_t res, const dr_bld_cost_t *c) {
 }
 
 static void render_build(void) {
-    render_topbar("建造");
+    render_topbar_c("建造", ACCENT_BUILD);
+    render_rule(44, 1, ACCENT_BUILD);
     // 资源摘要单行 @28:木/毛/肉/诱
     for (int i = 0; i < 4; i++) {
         cell_base(i, i * 49, 28);
@@ -1062,7 +1149,7 @@ static int village_row_job(int row) {
 }
 
 static void render_village(void) {
-    render_topbar(outside_name());
+    render_topbar_c(outside_name(), ACCENT_FOREST);
     render_tabs(1, true, nav_tab_enabled(2), -1);
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
     char v[32];
@@ -1267,11 +1354,12 @@ static const char *armor_name(uint8_t lv) {
 }
 
 static void render_map(void) {
-    render_topbar("荒野");
+    render_topbar_c("荒野", ACCENT_WILD);
     // 页签不进地图页(mockup ⑥"荒野地图(无页签)"):资源格才能落在 y24,
     // 不再与页签 y24-44 叠压(I7);长按确定返回小屋
     if (!s.game.in_wilderness) {
         // 出发整备(原版 Path 承重制):干肉/药/子弹在重量预算内自选
+        render_rule(44, 2, ACCENT_WILD);
         for (int i = 0; i < 4; i++) {
             cell_base(i, i * 49, 24);
             lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
@@ -1397,7 +1485,8 @@ static void render_map(void) {
 }
 
 static void render_ruin(void) {
-    render_topbar(dr_world_location_name(dr_world_location(&s_world)));
+    render_topbar_c(dr_world_location_name(dr_world_location(&s_world)),
+                    ruin_accent());
     for (int i = 0; i < 4; i++) {
         cell_base(i, i * 49, 24);
         lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
@@ -1434,7 +1523,7 @@ static void render_ruin(void) {
 }
 
 static void render_combat(void) {
-    render_topbar("战斗");
+    render_topbar_c("战斗", COL_ENEMY);
     uint8_t e = dr_world_fight_enemy(&s_world, &s.game);
     // 敌我名行(198 通栏)+ 血条(名30/条46/名62/条78)
     for (int i = 2; i < 8; i++) lv_obj_add_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
@@ -1514,7 +1603,8 @@ static void render_combat(void) {
 }
 
 static void render_trade(void) {
-    render_topbar("贸易");
+    render_topbar_c("贸易", ACCENT_TRADE);
+    render_rule(42, 2, ACCENT_TRADE);
     // 支付货币摘要:毛/鳞/牙(原版 TradeGoods 以此三者支付,只买不卖)
     for (int i = 0; i < 4; i++) {
         cell_base(i, i * 49, 24);
@@ -1554,7 +1644,7 @@ static void render_trade(void) {
 }
 
 static void render_settings(void) {
-    render_topbar("设置");
+    render_topbar_c("设置", COL_DIM);
     render_tabs(4, forest_open(), nav_tab_enabled(2), -1);
     // 9 行,步 25(52 起,尾行 252+22=274 收进内容区 278)
     set_row(0, 52, "操作说明", "键位:三键", s.focus == 0, false);
@@ -1578,7 +1668,7 @@ static void render_settings(void) {
 // ---- 存档码导出页(拍板:6 字/页,上/下翻页,确定=下一页,尾页确定=返回,
 // 长按确定=回第 1 页,顶部"第 n/N 页",页脚"拍照后按确定翻页") ----
 static void render_export(void) {
-    render_topbar("存档码");
+    render_topbar_c("存档码", COL_DIM);
     char hdr[24];
     snprintf(hdr, sizeof(hdr), "第%d/%d页", s.code_page + 1, s.code_pages);
     lv_label_set_text(s_code_hdr, hdr);
@@ -1598,7 +1688,7 @@ static void render_export(void) {
 // ---- 存档码导入页(拍板:逐字符输入;已输字符 6 字/行回看 3 行;
 // 输满自动校验,失败"确定=清空重来/长按=退出";双击下键随时退出) ----
 static void render_import(void) {
-    render_topbar("导入存档码");
+    render_topbar_c("导入存档码", COL_DIM);
     int cur_row = s.imp_pos / CODE_COLS;
     int start = (cur_row >= 3) ? cur_row - 2 : 0;
     for (int li = 0; li < 3; li++) {
@@ -1705,7 +1795,14 @@ static void render_event(void) {
             e->choices[i].text_id == DR_T_EV_SCOUT_MAP &&
             !dr_world_map_has_unseen(&s_world))
             ok = false;
-        if (!ok) lv_obj_set_style_text_color(a->lbl, lv_color_hex(COL_DIM), 0);
+        if (!ok) {   // 不可付:永不反色——灰字,焦点降级为金描边(T1)
+            lv_obj_set_style_bg_opa(a->row, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_width(a->row, s.focus == i ? 1 : 0, 0);
+            if (s.focus == i)
+                lv_obj_set_style_border_color(a->row,
+                                              lv_color_hex(COL_GOLD), 0);
+            lv_obj_set_style_text_color(a->lbl, lv_color_hex(COL_DIM), 0);
+        }
     }
     for (int i = e->choice_count; i < 5; i++)
         lv_obj_add_flag(s_dacts[i].row, LV_OBJ_FLAG_HIDDEN);
@@ -1749,7 +1846,8 @@ static const char *craft_name(uint8_t c) {
 }
 
 static void render_craft(void) {
-    render_topbar("制造");
+    render_topbar_c("制造", ACCENT_CRAFT);
+    render_rule(44, 2, ACCENT_CRAFT);
     for (int i = 0; i < 4; i++) {
         cell_base(i, i * 49, 24);
         lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
@@ -1843,7 +1941,7 @@ static void render_craft(void) {
 static int ship_rows(void) { return dr_fab_unlocked(&s.game) ? 5 : 4; }
 
 static void render_ship(void) {
-    render_topbar("星舰");
+    render_topbar_c("星舰", ACCENT_SHIP);
     render_tabs(3, forest_open(), nav_tab_enabled(2), -1);
     for (int i = 0; i < 4; i++) {
         cell_base(i, i * 49, 48);
@@ -1903,7 +2001,7 @@ static const char *fab_name(uint8_t f) {
 }
 
 static void render_fab(void) {
-    render_topbar("制造台");
+    render_topbar_c("制造台", ACCENT_CRAFT);
     for (int i = 0; i < 4; i++) {
         cell_base(i, i * 49, 24);
         lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
