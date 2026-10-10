@@ -71,7 +71,11 @@ LV_FONT_DECLARE(dr_font_24);
 
 static const char *TAG = "darkroom";
 
-typedef struct { bsp_btn_t btn; bsp_btn_ev_t ev; } key_event_t;
+typedef struct {
+    bsp_btn_t btn;
+    bsp_btn_ev_t ev;
+    uint32_t ms;   // 事件产生时刻(入队时间戳;幽灵窗按此判定,见 handle_key)
+} key_event_t;
 
 // ---- 页面 ----
 typedef enum {
@@ -96,6 +100,9 @@ static struct {
     bool prev_gather_ready;    // 上一拍冷却秒数(变化即重绘:冷却条/倒计时逐拍走)
     bool prev_trap_ready;
     bool prev_stoke_active;    // 主页添柴冷却条活动态(结束瞬间也要重绘一次)
+    uint8_t prev_stoke_sec;    // 冷却显示秒(按秒重绘;I34 幽灵窗吞键修复)
+    uint8_t prev_gather_sec;
+    uint8_t prev_trap_sec;
     uint32_t autosave_ms;      // 周期存档基准(挂机产出也落盘,断电回滚≤1分钟)
     uint32_t embark_cd_ms;     // 出发冷却到期时刻(死亡后 120s,原版口径)
     uint32_t liftoff_cd_ms;    // 升空冷却到期时刻(120s,原版 ship.js)
@@ -2816,20 +2823,30 @@ static void tick(lv_timer_t *t) {
     if (s.page == PG_HOME || s.page == PG_VILLAGE)
         check_event();
     if (s.page == PG_HOME) {
-        // 添柴冷却条随 250ms 心跳逐拍收短;冷却结束瞬间也要重绘一次清掉底色
+        // 添柴冷却条按秒收短(原每 250ms 整页重绘:冷却期碎片 flush 把
+        // I33 幽灵键静默窗铺满,真实按键按处理时刻撞窗被吞——真机 I34)
         int32_t s_rem = (int32_t)(s.rules_rt.stoke_ready_ms - now_ms);
-        if (s_rem > 0 || s.prev_stoke_active) s.dirty = true;
-        s.prev_stoke_active = (s_rem > 0);
+        bool s_act = (s_rem > 0);
+        uint8_t sec = s_act ? (uint8_t)((s_rem + 999) / 1000) : 0;
+        if (sec != s.prev_stoke_sec || s_act != s.prev_stoke_active)
+            s.dirty = true;
+        s.prev_stoke_sec = sec;
+        s.prev_stoke_active = s_act;
     }
     if (s.page == PG_VILLAGE) {
-        // 采集/陷阱倒计时按秒变化才重绘(文字分辨率 1s,跳变即刷)
+        // 采集/陷阱倒计时按秒变化才重绘(文字分辨率 1s,跳变即刷;
+        // 原实现 || g_act || t_act 退化成每 250ms 整页重绘,同上吞键事故)
         int32_t g_rem = (int32_t)(s.rules_rt.gather_ready_ms - now_ms);
         int32_t t_rem = (int32_t)(s.rules_rt.trap_next_ms - now_ms);
         bool t_has = s.game.building_lv[DR_BLD_TRAP] > 0;
         bool g_act = (g_rem > 0), t_act = t_has && (t_rem > 0);
-        if (g_act != s.prev_gather_ready || t_act != s.prev_trap_ready ||
-            g_act || t_act)
+        uint8_t g_sec = g_act ? (uint8_t)((g_rem + 999) / 1000) : 0;
+        uint8_t t_sec = t_act ? (uint8_t)((t_rem + 999) / 1000) : 0;
+        if (g_sec != s.prev_gather_sec || t_sec != s.prev_trap_sec ||
+            g_act != s.prev_gather_ready || t_act != s.prev_trap_ready)
             s.dirty = true;
+        s.prev_gather_sec = g_sec;
+        s.prev_trap_sec = t_sec;
         s.prev_gather_ready = g_act;
         s.prev_trap_ready = t_act;
     }
@@ -2878,7 +2895,7 @@ static bool nav_tab_enabled(int i) {
     }
 }
 
-static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
+static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
     if (ev != BSP_BTN_PRESS && ev != BSP_BTN_LONG && ev != BSP_BTN_HOLD) return;
     if (btn != BSP_BTN_UP && btn != BSP_BTN_DOWN && btn != BSP_BTN_OK) return;
     uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
@@ -2892,8 +2909,14 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     // 幽灵按键紧贴渲染出现;长按与连调看"实测电压是否仍在该键窗口内"——真实
     // 按住读数居窗口正中,轨塌/漏电型幽灵骑在边界,一测即穿帮。
     // 被拒的键不重置熄屏计时(否则幽灵风暴会让自动熄屏永远不触发)。
+    // I34:静默窗改按"事件产生时刻"(入队时间戳)判定——原按处理时刻,
+    // 冷却重绘期排队键被拖到 flush 后才处理,真实按键反被当幽灵吞掉。
     if (ev == BSP_BTN_PRESS) {
-        if (now_ms - s.last_render_ms < 60u) return;
+        int32_t dt = (int32_t)(ev_ms - s.last_render_ms);
+        if (dt >= 0 && dt < 60) {
+            ESP_LOGI(TAG, "diag drop btn=%d dt=%ld", (int)btn, (long)dt);
+            return;
+        }
     } else if (!bsp_button_mv_in_window(btn)) {
         return;
     }
@@ -3148,7 +3171,7 @@ static void key_task(void *arg) {
             ESP_LOGI(TAG, "diag key btn=%d ev=%d mv=%d",
                      (int)ke.btn, (int)ke.ev, bsp_button_read_mv());
             if (bsp_lvgl_lock(250)) {
-                handle_key(ke.btn, ke.ev);
+                handle_key(ke.btn, ke.ev, ke.ms);
                 render();
                 bsp_lvgl_unlock();
             }
@@ -3253,7 +3276,8 @@ void darkroom_app_enter(void) {
 void darkroom_app_key(bsp_btn_t btn, bsp_btn_ev_t ev) {
     // 回调运行于 button 组件的 esp_timer 任务:只做非阻塞入队,不打日志、不读外设
     if (!s_key_queue) return;
-    key_event_t ke = { .btn = btn, .ev = ev };
+    key_event_t ke = { .btn = btn, .ev = ev,
+                       .ms = (uint32_t)(esp_timer_get_time() / 1000) };
     xQueueSend(s_key_queue, &ke, 0);
 }
 
