@@ -1779,6 +1779,7 @@ static void render_settings(void) {
     char seed[12];
     snprintf(seed, sizeof(seed), "%u", (unsigned)s.game.map_seed);
     set_row(3, 127, "世界种子", seed, s.focus == 3, true);   // 只读:存档同图复现
+#if DR_FEATURE_SAVECODE
     set_row(4, 152, "存档", "自动·1分钟", false, true);    // 只读:落盘节奏说明
     set_row(5, 177, "存档码", "拍照保档", s.focus == 5, false);
     set_row(6, 202, "熄屏", k_scr_off_lbl[scr_off_level()],
@@ -1786,6 +1787,16 @@ static void render_settings(void) {
     set_row(7, 227, "睡眠", k_sleep_lbl[sleep_mode()],
             s.focus == 7, false);                          // L2/L3 档位(§8.1)
     set_row(8, 252, "返回", "", s.focus == 8, false);
+#else
+    // 存档码隐藏(DR_FEATURE_SAVECODE=0):导入逐字符输 200+ 字符体验未到位;
+    // 后续行上移补位
+    set_row(4, 152, "存档", "自动·1分钟", false, true);    // 只读:落盘节奏说明
+    set_row(5, 177, "熄屏", k_scr_off_lbl[scr_off_level()],
+            s.focus == 5, false);                          // 长按下键随时手动熄屏
+    set_row(6, 202, "睡眠", k_sleep_lbl[sleep_mode()],
+            s.focus == 6, false);                          // L2/L3 档位(§8.1)
+    set_row(7, 227, "返回", "", s.focus == 7, false);
+#endif
 }
 
 // ---- 存档码导出页(拍板:6 字/页,上/下翻页,确定=下一页,尾页确定=返回,
@@ -2312,7 +2323,11 @@ static int page_lines(void) {
             return 4 + (dr_world_carry_grenades(&s_world) > 0 ? 1 : 0) +
                        (dr_world_carry_bolas(&s_world) > 0 ? 1 : 0);
         case PG_TRADE: return 11;   // 10 档货(M5 +元件/合金)+ 返回
+#if DR_FEATURE_SAVECODE
         case PG_SETTINGS: return 9;   // 说明/重开/关于/种子/存档/存档码/熄屏/睡眠/返回
+#else
+        case PG_SETTINGS: return 8;   // 说明/重开/关于/种子/存档/熄屏/睡眠/返回(码隐藏)
+#endif
         case PG_EVENT: {
             uint16_t c = 0;
             const dr_event_t *ev = dr_events_table(&c);
@@ -2954,7 +2969,11 @@ static void list_action(int idx) {
             break;
         }
         case PG_SETTINGS:
+#if DR_FEATURE_SAVECODE
             if (idx == 8) page_goto(PG_HOME);
+#else
+            if (idx == 7) page_goto(PG_HOME);   // 存档码隐藏后返回行 8→7
+#endif
             else if (idx == 0) log_push("上下/确定/长按返回/双击下熄屏");
             else if (idx == 1) {                       // 重开本局:需确认
                 s.confirm_from = 0;
@@ -2962,14 +2981,18 @@ static void list_action(int idx) {
             }
             else if (idx == 3) log_push("种子决定地图与随机序列");
             else if (idx == 4) log_push("每分钟或按键后自动落盘");
+#if DR_FEATURE_SAVECODE
             else if (idx == 5) page_goto(PG_EXPORT);   // 存档码:短按=导出(长按=导入,见 LONG 分支)
             else if (idx == 6) {                       // 熄屏档位循环(L1)
+#else
+            else if (idx == 5) {                       // 熄屏档位循环(L1;码隐藏后前移)
+#endif
                 uint8_t lv = (uint8_t)((scr_off_level() + 1) % 5);
                 s.game._rsv[1] = (uint8_t)((s.game._rsv[1] & ~0x07u) | lv);
                 s.save_pending = true;
                 log_push(lv ? "熄屏已开,双击下键手动熄屏" : "熄屏已关");
             }
-            else if (idx == 7) {                       // 睡眠模式循环(L2/L3)
+            else if (idx == (DR_FEATURE_SAVECODE ? 7 : 6)) {   // 睡眠模式循环(L2/L3)
                 uint8_t m = (uint8_t)((sleep_mode() + 1) % 4);
                 s.game._rsv[1] = (uint8_t)((s.game._rsv[1] & 0x07u) | (m << 3));
                 s.save_pending = true;
@@ -3690,11 +3713,13 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
             page_goto(PG_CONFIRM);
             return;
         }
-        // 存档码行长按 = 导入(短按 = 导出,见 list_action)
+        // 存档码行长按 = 导入(短按 = 导出,见 list_action);功能隐藏时无此行
+#if DR_FEATURE_SAVECODE
         if (s.page == PG_SETTINGS && s.focus == 5) {
             page_goto(PG_IMPORT);
             return;
         }
+#endif
         // 长按返回;事件/战斗/确认页禁用(必须显式选择);远征中禁用
         // (2026-10-07 A 项:此前远征中长按确定会瞬移回家——背包战利品
         // 悬空、再出发被清袋,规则上远征只有走回村或战死两个出口)

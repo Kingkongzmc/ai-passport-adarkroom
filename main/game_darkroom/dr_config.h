@@ -14,6 +14,9 @@ extern "C" {
 #define DR_SAVE_VERSION   6u      // 存档结构版本,迁移见 dr_state.h(v6:能量元件/星舰/周目)
 #define DR_SAVE_NVS_KEY   "dr_save"
 #define DR_FLAG_BITS      64      // 剧情标记位数(事件表引用 0..63)
+// 存档码功能开关(M7):导入要逐字符输 200+ 字符,体验未到位先隐藏;
+// 串口导入就绪后置 1 重新放出(代码全保留,仅设置页行与入口受此门)。
+#define DR_FEATURE_SAVECODE 0
 
 // 剧情标记位(flags;规则层与事件表共用;M4:到访矿并回家后置位)
 #define DR_FLAG_IRON_MINE     4u
