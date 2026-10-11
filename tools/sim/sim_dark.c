@@ -249,6 +249,9 @@ int main(int argc, char **argv) {
     // 前置脚本需先把页面导到导入页,见 tools/keys.txt M7 段)
     char *sim_code = getenv("SIM_TYPE_CODE");
     if (sim_code) dr_debug_type_code(sim_code);
+    // SIM_RICH=1:中期存档观感造档(资源/人口/建筑/职业/多彩日志),
+    // 全页面截图"数据多样好看"用
+    if (getenv("SIM_RICH")) dr_debug_set_rich();
 
     for (int f = 0; f < frames; f++) {
         for (int k = 0; k < s_key_count; k++)

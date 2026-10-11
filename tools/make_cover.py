@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""生成《小黑屋》AI Passport 封面图:真实游戏截图 + 设备化相框 + 品牌文字。
-用法: python tools/make_cover.py  → docs/cover.png (900×1300)"""
+"""生成《小黑屋》AI Passport 封面(发布规范:3:4 竖版 1152×1536)。
+玩法优先:官方设备参考图 + 亮屏真实游戏画面(标题页全揭示态)+
+金色标题与品牌条,底部余烬光晕呼应火光带。
+用法: python tools/make_cover.py  → docs/cover.png"""
 import os
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHOT = os.path.join(ROOT, "docs", "screenshots")
+REF = os.path.expanduser(
+    r"~\.zcode\skills\folotoy-ai-passport-publisher"
+    r"\references\ai-passport-device-reference.png")
 OUT = os.path.join(ROOT, "docs", "cover.png")
-W, H = 900, 1300
+W, H = 1152, 1536
 
 GOLD = (255, 217, 40)
 AMBER = (224, 138, 60)
@@ -26,9 +31,9 @@ def lat(size, bold=False):
     name = "arialbd.ttf" if bold else "arial.ttf"
     return ImageFont.truetype(os.path.join(r"C:\Windows\Fonts", name), size)
 
-# ---- 背景:垂直暗渐变 + 底部余烬光晕(呼应标题页火光带) ----
+# ---- 背景:垂直暗渐变 + 底部余烬光晕(呼应游戏火光带) ----
 bg = Image.new("RGB", (W, H))
-top, bot = (16, 16, 20), (30, 26, 23)
+top, bot = (14, 14, 18), (32, 27, 22)
 for y in range(H):
     t = y / H
     row = tuple(int(a + (b - a) * t) for a, b in zip(top, bot))
@@ -36,70 +41,47 @@ for y in range(H):
         bg.putpixel((x, y), row)
 glow = Image.new("L", (W, H), 0)
 gd = ImageDraw.Draw(glow)
-gd.ellipse((W//2 - 420, H - 460, W//2 + 420, H + 140), fill=70)
-glow = glow.filter(ImageFilter.GaussianBlur(120))
-ember = Image.new("RGB", (W, H), AMBER)
-bg = Image.composite(ember, bg, glow)
+gd.ellipse((W//2 - 520, H - 560, W//2 + 520, H + 160), fill=72)
+glow = glow.filter(ImageFilter.GaussianBlur(140))
+bg = Image.composite(Image.new("RGB", (W, H), AMBER), bg, glow)
 
+# ---- 设备参考图(官方透明壳)×1.38,底部对齐充满下半 ----
+dev = Image.open(REF).convert("RGBA")
+SCALE = 1.38
+DW, DH = int(dev.width * SCALE), int(dev.height * SCALE)
+dev = dev.resize((DW, DH), Image.LANCZOS)
+dx, dy = (W - DW) // 2, H - DH - 2
+bg.paste(dev, (dx, dy), dev)
 d = ImageDraw.Draw(bg)
 
-# ---- 主画面:标题页截装入圆角"设备屏"相框 ----
+# ---- 屏幕区换装:标题页全揭示态(参考图屏幕 (115,122)-(413,518)) ----
+sx0, sy0 = dx + int(114 * SCALE), dy + int(120 * SCALE)
+sx1, sy1 = dx + int(415 * SCALE), dy + int(533 * SCALE)
 hero = Image.open(os.path.join(SHOT, "01_title.png")).convert("RGB")
-HW, HH = 396, 528                      # 240×320 ×1.65
-hero = hero.resize((HW, HH), Image.LANCZOS)
-fx, fy = (W - HW) // 2, 190
-BEZ = 18
-frame = Image.new("RGBA", (HW + BEZ * 2, HH + BEZ * 2), (0, 0, 0, 0))
-fd = ImageDraw.Draw(frame)
-fd.rounded_rectangle((0, 0, frame.width - 1, frame.height - 1), radius=34,
-                     fill=(26, 26, 30, 255), outline=(70, 68, 64, 255), width=2)
-fd.rounded_rectangle((BEZ - 4, BEZ - 4, BEZ + HW + 3, BEZ + HH + 3), radius=22,
-                     outline=(10, 10, 10, 255), width=4)
-mask = Image.new("L", frame.size, 0)
-ImageDraw.Draw(mask).rounded_rectangle((0, 0, frame.width - 1, frame.height - 1),
-                                       radius=34, fill=255)
-bg.paste(frame, (fx - BEZ, fy - BEZ), mask)
-rmask = Image.new("L", (HW, HH), 0)
-ImageDraw.Draw(rmask).rounded_rectangle((0, 0, HW - 1, HH - 1), radius=24, fill=255)
-bg.paste(hero, (fx, fy), rmask)
+hero = hero.resize((sx1 - sx0, sy1 - sy0), Image.LANCZOS)
+rmask = Image.new("L", hero.size, 0)
+ImageDraw.Draw(rmask).rounded_rectangle((0, 0, hero.width - 1, hero.height - 1),
+                                        radius=16, fill=255)
+bg.paste(hero, (sx0, sy0), rmask)
 d = ImageDraw.Draw(bg)
 
-# ---- 品牌区:游戏名 + 英文副题 ----
+# ---- 顶部:游戏标题(金)+ 副题 ----
 title = "小黑屋"
-f_title = cjk(96, bold=True)
+f_title = cjk(140, bold=True)
 tw = d.textlength(title, font=f_title)
-tx, ty = (W - tw) / 2, 44
-for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2)):   # 暗描边
-    d.text((tx + dx, ty + dy), title, font=f_title, fill=(90, 70, 8))
+tx, ty = (W - tw) / 2, 36
+for ddx, ddy in ((-3, 0), (3, 0), (0, -3), (0, 3)):
+    d.text((tx + ddx, ty + ddy), title, font=f_title, fill=(92, 72, 8))
 d.text((tx, ty), title, font=f_title, fill=GOLD)
-sub = "A DARK ROOM · ESP32 完整重制"
-f_sub = cjk(30)
-d.text(((W - d.textlength(sub, font=f_sub)) / 2, 158), sub, font=f_sub, fill=DIM)
+sub = "A DARK ROOM · ESP32-C3 完整重制"
+f_sub = cjk(38)
+d.text(((W - d.textlength(sub, font=f_sub)) / 2, 196), sub, font=f_sub, fill=DIM)
 
-# ---- 底部:AI PASSPORT 品牌条 + 三小截图 ----
-brand_y = fy + HH + BEZ + 52
-d.text((W / 2 - 168, brand_y), "AI", font=lat(58, True), fill=PAPER)
-d.text((W / 2 - 84, brand_y), "PASSPORT", font=lat(58, True), fill=GOLD)
-tag = "FoloToy AI Passport · ESP32-C3 · 240×320 · 离线文字放置冒险"
-f_tag = cjk(24)
-d.text(((W - d.textlength(tag, font=f_tag)) / 2, brand_y + 78), tag,
-       font=f_tag, fill=DIM)
-
-strip_y = brand_y + 128
-names = ["02_home.png", "07_combat.png", "05_map.png"]
-sw_, sh_ = 168, 224
-total = len(names) * sw_ + (len(names) - 1) * 24
-sx = (W - total) // 2
-for i, n in enumerate(names):
-    im = Image.open(os.path.join(SHOT, n)).convert("RGB").resize((sw_, sh_),
-                                                                 Image.LANCZOS)
-    m = Image.new("L", (sw_, sh_), 0)
-    ImageDraw.Draw(m).rounded_rectangle((0, 0, sw_ - 1, sh_ - 1), radius=12,
-                                        fill=255)
-    bg.paste(im, (sx + i * (sw_ + 24), strip_y), m)
-    d.rounded_rectangle((sx + i * (sw_ + 24), strip_y,
-                         sx + i * (sw_ + 24) + sw_, strip_y + sh_),
-                        radius=12, outline=(70, 68, 64), width=2)
+# ---- 底部:品牌条(叠在设备底部暗区,与参考图品牌行同位) ----
+brand = "AI PASSPORT · 小黑屋 · 离线文字放置冒险"
+f_brand = cjk(44)
+d.text(((W - d.textlength(brand, font=f_brand)) / 2, 1442), brand,
+       font=f_brand, fill=PAPER)
 
 bg.save(OUT)
 print("cover ->", OUT, bg.size)

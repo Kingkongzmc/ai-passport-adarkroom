@@ -23,6 +23,7 @@ void dr_debug_set_ship(uint8_t exec, uint8_t hull, uint8_t thr, uint32_t alloy);
 void dr_debug_set_outfit(void);   // 模拟器:整备页直达(SIM_OUTFIT)
 // 模拟器:导入页逐字符注入(跳过按键路径,测校验/应用链;SIM_TYPE_CODE)
 void dr_debug_type_code(const char *code);
+void dr_debug_set_rich(void);   // 模拟器:中期存档观感造档(SIM_RICH)
 
 #ifdef __cplusplus
 }

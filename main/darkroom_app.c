@@ -4265,6 +4265,69 @@ void dr_debug_force_event(uint16_t idx) {
 
 // 模拟器诊断:星舰页直达(仅主机构建;SIM_SHIP=exec,hull,thr,alloy)。
 // 注入页签旗标与船态,供星舰页/制造台/升空序列截图与按键实测。
+// 模拟器造档:中期存档观感(SIM_RICH=1,截图/封面/演示用)。资源/人口/
+// 建筑/职业/火候/剧情旗标/多彩日志一次到位;不落盘,仅会话生效。
+void dr_debug_set_rich(void) {
+    s.game.fire_lv = DR_FIRE_ROARING;   // 炽烈
+    s.game.builder_lv = 4;              // 建造者:帮忙
+    s.game.population = 14;
+    s.game.water = 12;
+    s.game.food = 9;
+    s.game.hero_hp = s.game.hero_hp_max = 14;
+    s.game.res[DR_RES_WOOD] = 12640;
+    s.game.res[DR_RES_FUR] = 8640;
+    s.game.res[DR_RES_MEAT] = 5320;
+    s.game.res[DR_RES_BAIT] = 640;
+    s.game.res[DR_RES_LEATHER] = 3180;
+    s.game.res[DR_RES_SCALES] = 2140;
+    s.game.res[DR_RES_TEETH] = 980;
+    s.game.res[DR_RES_MEDICINE] = 24;
+    s.game.res[DR_RES_BULLETS] = 64;
+    s.game.res[DR_RES_IRON] = 820;
+    s.game.res[DR_RES_COAL] = 460;
+    s.game.res[DR_RES_STEEL] = 120;
+    s.game.res[DR_RES_SULPHUR] = 85;
+    s.game.res[DR_RES_ALIEN] = 3;
+    s.game.res[DR_RES_ENERGY_CELL] = 2;
+    s.game.res[DR_RES_GRENADE] = 4;
+    s.game.res[DR_RES_BOLAS] = 2;
+    s.game.building_lv[DR_BLD_CART] = 1;
+    s.game.building_lv[DR_BLD_TRAP] = 6;
+    s.game.building_lv[DR_BLD_HUT] = 4;
+    s.game.building_lv[DR_BLD_LODGE] = 1;
+    s.game.building_lv[DR_BLD_TRADE_POST] = 1;
+    s.game.building_lv[DR_BLD_TANNERY] = 1;
+    s.game.building_lv[DR_BLD_SMOKEHOUSE] = 1;
+    s.game.building_lv[DR_BLD_WORKSHOP] = 1;
+    s.game.job[0] = 6;   // 猎人
+    s.game.job[1] = 3;   // 捕兽人
+    s.game.job[2] = 2;   // 制革匠
+    s.game.job[3] = 2;   // 熏肉匠
+    s.game.weapon_lv = 2;   // 铁剑
+    s.game.armor_lv = 1;    // 铁甲
+    s.game.flags |= ((uint64_t)1u << DR_FLAG_FOREST) |
+                    ((uint64_t)1u << DR_FLAG_COMPASS) |
+                    ((uint64_t)1u << DR_FLAG_TORCH) |
+                    ((uint64_t)1u << DR_FLAG_SHIP_OPEN) |
+                    ((uint64_t)1u << DR_FLAG_PERK_GASTRONOME);
+    // 多彩日志(老→新;T4 主语色:我=蓝/敌=红/系统=白;全部闭集内文案)
+    s_log_cnt = 0;
+    log_push("她站在火边:可以帮忙了");
+    log_push_o("收集到 50 木", LOG_ME);
+    log_push("陷阱收获:毛皮 诱饵");
+    log_push_o("遭遇了嘶吼野兽!", LOG_FOE);
+    log_push_o("命中!", LOG_ME);
+    log_push_o("它反击得手", LOG_FOE);
+    log_push_o("击败了它!战利品入包", LOG_ME);
+    log_push("可以派村民去采铁矿了");
+    log_push("火头正旺,先等等再添");
+    s.page = PG_HOME;
+    s.focus = 0;
+    s.dirty = true;
+}
+
+// 模拟器诊断:星舰页直达(仅主机构建;SIM_SHIP=exec,hull,thr,alloy)。
+// 注入页签旗标与船态,供星舰页/制造台/升空序列截图与按键实测。
 void dr_debug_set_ship(uint8_t exec, uint8_t hull, uint8_t thr, uint32_t alloy) {
     s.game.flags |= (uint64_t)1u << DR_FLAG_SHIP_OPEN;
     s.game.exec_state = exec;
