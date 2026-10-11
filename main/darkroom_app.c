@@ -145,6 +145,8 @@ static struct {
     uint32_t toast_until_ms;
     uint32_t toast_col;        // 提示条颜色(T4:金=反馈,红=威胁)
     uint8_t dpanel_drop;       // 弹窗上滑入场剩余拍数(T7a:8/4/0 三档)
+    bool log_browse;           // 主页日志浏览态(T8:下过末行动作进入,确定退出)
+    uint8_t log_off;           // 浏览滚动偏移(0=最新在顶,上限 cnt-8)
     dr_game_t game;
     dr_rules_rt_t rules_rt;
     dr_event_session_t ev_sess;
@@ -216,7 +218,7 @@ static QueueHandle_t s_key_queue;
 static TaskHandle_t s_key_task;
 static volatile bool s_key_quit;
 
-#define LOG_LINES 8        // 主页日志环形缓冲条数
+#define LOG_LINES 32       // 主页日志环形缓冲条数(浏览模式可回看,可视窗 8)
 static char s_logs[LOG_LINES][48];
 static int s_log_cnt;
 // 语义主语色(美化 T4):并行会话内标记,NVS 不持久——重启恢复的旧日志
@@ -951,20 +953,36 @@ static void render_home_log(int n_acts, int act_top) {
     lv_obj_clear_flag(s_logpanel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(s_logpanel, 0, 86);
     lv_obj_set_size(s_logpanel, 198, act_top - 90);
+    // 浏览窗(T8):off=0 最新在顶;浏览时窗口滑向更早记录
+    int off = s.log_browse ? s.log_off : 0;
+    int max_off = (s_log_cnt > LOG_VIS) ? s_log_cnt - LOG_VIS : 0;
+    if (off > max_off) off = max_off;
     for (int i = 0; i < LOG_VIS; i++) {
+        int a = off + i;   // 绝对序(0=最新),越窗即旧
+        const char *e = (a < s_log_cnt) ? s_logs[s_log_cnt - 1 - a] : NULL;
         lv_obj_t *l = s_loglines[i];
-        if (i >= show) { lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN); continue; }
-        const char *e = log_entry_newest_first(i);
-        if (!e) { lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN); continue; }
+        if (i >= show || !e) { lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN); continue; }
         lv_obj_set_pos(l, 4, 90 + i * pitch);   // 面板内缩进 4px
         lv_obj_clear_flag(l, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(l, e);
-        lv_obj_set_style_text_color(l, log_fade(i, show, log_base(i)), 0);
+        lv_obj_set_style_text_color(l, log_fade(a, s_log_cnt, log_base(a)), 0);
     }
-    // 最新一行锚点条(T7e):有日志时点亮,无日志隐藏
-    if (show > 0 && s_log_cnt > 0) {
+    // 最新一行锚点条(T7e):静止(非浏览)且有日志时点亮
+    if (show > 0 && s_log_cnt > 0 && !s.log_browse) {
         lv_obj_clear_flag(s_logtick, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_pos(s_logtick, 1, 92);
+    }
+    // 浏览滚动指示条(T8):复用轨道/滑块,置于面板右缘
+    if (s.log_browse && s_log_cnt > LOG_VIS && act_top - 94 > 12) {
+        int tr_h = act_top - 94;
+        int th = tr_h * LOG_VIS / s_log_cnt;
+        if (th < 6) th = 6;
+        lv_obj_set_pos(s_strack, 194, 90);
+        lv_obj_set_size(s_strack, 2, tr_h);
+        lv_obj_clear_flag(s_strack, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_pos(s_sthumb, 194, 90 + off * (tr_h - th) / max_off);
+        lv_obj_set_size(s_sthumb, 2, th);
+        lv_obj_clear_flag(s_sthumb, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -1165,7 +1183,7 @@ static void render_home(uint32_t now_ms) {
         lv_obj_set_style_text_align(s_acts[i].lbl, LV_TEXT_ALIGN_LEFT, 0);
     }
     int idx = 0;
-    bool act_focus = (s.nav_focus < 0);   // 光标在页签上时动作区整体去焦点
+    bool act_focus = (s.nav_focus < 0) && !s.log_browse;   // 页签/日志浏览态时动作区去焦点(T8)
     bool no_wood = s.game.res[DR_RES_WOOD] < DR_FIRE_LIGHT_COST;
     int sp = stoke_pct(now_ms);
     char stbuf[24];
@@ -2633,6 +2651,8 @@ static void page_goto(page_t p) {
     s.outfit_adj = -1;    // 离开整备态
     s_title_reveal_ms = 0;   // 标题打字机基准(T3):进标题页首帧重记
     s.dpanel_drop = (p == PG_EVENT || p == PG_CONFIRM) ? 2 : 0;   // T7a 上滑
+    s.log_browse = false;   // T8:浏览态只在主页存续,切页即退
+    s.log_off = 0;
     // T7d:切页收场——金条隐藏、补间删除、归属重置(新页由 render 尾重新注册)
     lv_anim_delete(s_focusbar, bar_y_cb);
     s_bar_moving = false;
@@ -3639,6 +3659,18 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
             s.dirty = true;
             return;
         }
+        // 主页日志浏览(T8):按住上/下连续滚窗(节流同 100ms)
+        if (s.page == PG_HOME && s.log_browse) {
+            int max_off = (s_log_cnt > LOG_VIS) ? s_log_cnt - LOG_VIS : 0;
+            if (btn == BSP_BTN_UP && s.log_off > 0) {
+                s.log_off--;
+                s.dirty = true;
+            } else if (btn == BSP_BTN_DOWN && s.log_off < max_off) {
+                s.log_off++;
+                s.dirty = true;
+            }
+            return;
+        }
         // 光标长按连发(I37):常规列表/弹窗按住上/下逐行连走,免逐下按
         // (调节态的数量连发已在上面两个分支处理;节流同 100ms)
         if (btn == BSP_BTN_UP) focus_move(-1);
@@ -3763,6 +3795,31 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
         }
         if (s.page == PG_HOME && btn == BSP_BTN_UP && s.focus == 0) {
             s.nav_focus = 0;   // 从动作区顶端向上进入导航栏
+            s.dirty = true;
+            return;
+        }
+        // 主页日志浏览(T8):下键越过末行动作进入(有更早记录时);
+        // 浏览态上/下滚窗,确定退出回动作区
+        if (s.page == PG_HOME && s.log_browse) {
+            if (btn == BSP_BTN_OK) {
+                s.log_browse = false;
+                s.dirty = true;
+                return;
+            }
+            int max_off = (s_log_cnt > LOG_VIS) ? s_log_cnt - LOG_VIS : 0;
+            if (btn == BSP_BTN_UP && s.log_off > 0) {
+                s.log_off--;
+                s.dirty = true;
+            } else if (btn == BSP_BTN_DOWN && s.log_off < max_off) {
+                s.log_off++;
+                s.dirty = true;
+            }
+            return;
+        }
+        if (s.page == PG_HOME && btn == BSP_BTN_DOWN && s.nav_focus < 0 &&
+            s.focus == home_lines() - 1 && s_log_cnt > LOG_VIS) {
+            s.log_browse = true;   // 下过末行 → 进入日志浏览
+            s.log_off = 0;
             s.dirty = true;
             return;
         }
