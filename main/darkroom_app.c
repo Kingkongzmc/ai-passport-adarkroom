@@ -144,6 +144,7 @@ static struct {
     char toast[40];            // 就地结果提示(覆盖当前页提示行,到期还原)
     uint32_t toast_until_ms;
     uint32_t toast_col;        // 提示条颜色(T4:金=反馈,红=威胁)
+    uint8_t dpanel_drop;       // 弹窗上滑入场剩余拍数(T7a:8/4/0 三档)
     dr_game_t game;
     dr_rules_rt_t rules_rt;
     dr_event_session_t ev_sess;
@@ -165,11 +166,23 @@ static lv_obj_t *s_hint;
 static lv_obj_t *s_rule, *s_tick;   // 页头规则线+accent 短色条(T2,最底层)
 static lv_obj_t *s_logpanel, *s_jobpanel;   // 日志/职业窗内嵌面板(T5,最底层)
 static lv_obj_t *s_sep;             // 设置页危险项分隔线(T5)
+static lv_obj_t *s_logtick;         // 主页最新日志锚点条(T7e,最底层)
+static lv_obj_t *s_focusbar;        // 共享反色金条(T7d,最底层透显)
+static bool s_veil_fading;          // 切页淡入进行中(T7a;clear_scene 让路)
 static lv_obj_t *s_strack, *s_sthumb;   // 滚动指示条:右缘轨道+滑块(村庄/制造窗)
 // 动作行:容器 + 冷却填充 + 箭头 + 文字(主页/战斗/弹窗选项共用骨架)
 typedef struct {
     lv_obj_t *row, *fill, *arrow, *lbl;
 } actrow_t;
+// 金条归属与滑动状态(T7d):每页至多一行持焦(set_act/set_row 注册,最后写者
+// 胜);页面存续期由 render() 尾统一驱动位置与 80ms y 补间,切页由 page_goto 收场
+static actrow_t *s_bar_act;
+static int s_bar_row = -1;
+static bool s_bar_shown;
+static int s_bar_last_y;
+static bool s_bar_moving;
+static void bar_y_cb(void *v, int32_t y);
+static void bar_move_done_cb(lv_anim_t *a);
 #define ACT_ROWS 4
 static actrow_t s_acts[ACT_ROWS];
 // 列表行:箭头 + 名称 + 值(建造/村庄/贸易/设置/地图目的地/房间)
@@ -469,6 +482,24 @@ static void build_ui(void) {
     lv_obj_set_style_border_width(s_sep, 0, 0);
     lv_obj_set_style_pad_all(s_sep, 0, 0);
     lv_obj_clear_flag(s_sep, LV_OBJ_FLAG_SCROLLABLE);
+    s_logtick = lv_obj_create(s_content);
+    lv_obj_set_pos(s_logtick, 1, 92);
+    lv_obj_set_size(s_logtick, 2, 11);
+    lv_obj_set_style_radius(s_logtick, 1, 0);
+    lv_obj_set_style_bg_color(s_logtick, lv_color_hex(COL_AMBER), 0);
+    lv_obj_set_style_border_width(s_logtick, 0, 0);
+    lv_obj_set_style_pad_all(s_logtick, 0, 0);
+    lv_obj_clear_flag(s_logtick, LV_OBJ_FLAG_SCROLLABLE);
+    // 共享焦点条(T7d):底层透显——行容器全透明底,金条从下方露出,
+    // 行文字(晚创建=高层)压在金条上;位置由 render() 尾统一驱动
+    s_focusbar = lv_obj_create(s_content);
+    lv_obj_set_size(s_focusbar, 198, 18);
+    lv_obj_set_style_radius(s_focusbar, 3, 0);
+    lv_obj_set_style_bg_color(s_focusbar, lv_color_hex(COL_GOLD), 0);
+    lv_obj_set_style_border_width(s_focusbar, 0, 0);
+    lv_obj_set_style_pad_all(s_focusbar, 0, 0);
+    lv_obj_clear_flag(s_focusbar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_focusbar, LV_OBJ_FLAG_HIDDEN);
 
     // 顶栏:标题(0,0,110,20 f12) + 电池(150,2,48,15 f12 右对齐)
     s_topbar = label_new(s_content, &dr_font_12, lv_color_hex(COL_GOLD), 0, 0, 110, 20);
@@ -930,20 +961,27 @@ static void render_home_log(int n_acts, int act_top) {
         lv_label_set_text(l, e);
         lv_obj_set_style_text_color(l, log_fade(i, show, log_base(i)), 0);
     }
+    // 最新一行锚点条(T7e):有日志时点亮,无日志隐藏
+    if (show > 0 && s_log_cnt > 0) {
+        lv_obj_clear_flag(s_logtick, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_pos(s_logtick, 1, 92);
+    }
 }
 
 // 动作行:文字 + 焦点 + 冷却填充百分比(0=就绪无底色)。
-// 焦点态(T1):整行反色金底墨字;冷却中退为 1px 金描边(墨字压暗条不可读)。
-// 反色块修正(真机反馈):行容器 22 高,行距 19/20/21 的页面金底会压到下一行
-// 1-3px → 反色时块高收到 18;墨字在 22 高容器里贴顶(上缝 2/下缝 9),
-// 反色时标签下移 2px,使其在 18 高块内垂直居中
+// 焦点态(T1/T7d):反色金块由共享焦点条承担(set_act 只染墨字/下移文字);
+// 冷却中退为 1px 金描边;对话框选项行(异父)保持逐行反色,不接共享条
 static void set_act(actrow_t *a, const char *text, bool focus, int fill_pct) {
     lv_label_set_text(a->arrow, focus ? ">" : "");
     lv_label_set_text(a->lbl, text);
     bool inv = focus && fill_pct <= 0;
-    lv_obj_set_style_bg_opa(a->row, inv ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
-    if (inv)
+    bool own_bar = inv && lv_obj_get_parent(a->row) == s_content;
+    if (inv && !own_bar) {
+        lv_obj_set_style_bg_opa(a->row, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(a->row, lv_color_hex(COL_GOLD), 0);
+    } else {
+        lv_obj_set_style_bg_opa(a->row, LV_OPA_TRANSP, 0);
+    }
     lv_obj_set_style_border_width(a->row, (focus && !inv) ? 1 : 0, 0);
     if (focus && !inv)
         lv_obj_set_style_border_color(a->row, lv_color_hex(COL_GOLD), 0);
@@ -951,10 +989,13 @@ static void set_act(actrow_t *a, const char *text, bool focus, int fill_pct) {
                                 lv_color_hex(inv ? COL_INK : COL_GOLD), 0);
     lv_obj_set_style_text_color(a->lbl,
         lv_color_hex(inv ? COL_INK : focus ? COL_GOLD : COL_TEXT), 0);
-    lv_obj_set_size(a->row, lv_obj_get_width(a->row), inv ? 18 : 22);
     int ty = inv ? 3 : 1;
     lv_obj_set_pos(a->arrow, 2, ty);
     lv_obj_set_pos(a->lbl, 2 + ARROW_W12, ty);
+    if (own_bar) {
+        s_bar_act = a;
+        s_bar_row = -1;
+    }
     if (fill_pct > 0) {
         lv_obj_clear_flag(a->fill, LV_OBJ_FLAG_HIDDEN);
         // 铺满所在行内宽(主页动作行 198 / 弹窗选项行 172),
@@ -972,18 +1013,17 @@ static void hide_acts(void) {
 
 // 列表行:t 名称(focus 反色墨字/lock 灰) v 值(右对齐)。
 // T1:焦点整行反色金底墨字;锁定行永不反色。
-// 反色块修正(同 set_act,真机反馈):块高收 18 防压下一行,文字下移居中,
-// 箭头金→墨(金底上金箭头不可见)
+// T7d:反色金块由共享焦点条承担,行容器恒 22 透明底
 static void set_row(int i, int y, const char *t, const char *v,
                     bool focus, bool lock) {
     listrow_t *r = &s_list[i];
     lv_obj_set_pos(r->row, 0, y);
     lv_obj_clear_flag(r->row, LV_OBJ_FLAG_HIDDEN);
     bool inv = focus && !lock;
-    lv_obj_set_style_bg_opa(r->row, inv ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
-    if (inv)
-        lv_obj_set_style_bg_color(r->row, lv_color_hex(COL_GOLD), 0);
-    lv_obj_set_size(r->row, 198, inv ? 18 : 22);
+    if (inv) {
+        s_bar_act = NULL;
+        s_bar_row = i;
+    }
     int ty = inv ? 3 : 1;
     lv_label_set_text(r->mark, focus ? ">" : "");
     lv_obj_set_pos(r->mark, 4, ty);
@@ -1017,6 +1057,9 @@ static void clear_scene(void) {
     lv_obj_add_flag(s_logpanel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_jobpanel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_sep, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_logtick, LV_OBJ_FLAG_HIDDEN);
+    // 焦点条(T7d)不在此隐藏/重置:它的显隐与归属由 render() 尾全权驱动,
+    // 页面存续期的补间不能被中间渲染打断;切页时由 page_goto 统一收场
     lv_obj_add_flag(s_strack, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_sthumb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_t_big, LV_OBJ_FLAG_HIDDEN);
@@ -1037,7 +1080,8 @@ static void clear_scene(void) {
         lv_obj_add_flag(s_code_char[i], LV_OBJ_FLAG_HIDDEN);
     for (int i = 0; i < 3; i++)
         lv_obj_add_flag(s_imp_lines[i], LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_veil, LV_OBJ_FLAG_HIDDEN);
+    if (!s_veil_fading)   // 淡入进行中 veil 由动画接管(clear_scene 让路,T7a)
+        lv_obj_add_flag(s_veil, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dpanel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dtitle, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dbody, LV_OBJ_FLAG_HIDDEN);
@@ -1126,11 +1170,12 @@ static void render_home(uint32_t now_ms) {
     int sp = stoke_pct(now_ms);
     char stbuf[24];
     const char *stoke;
+    long stoke_rem_s = -1;
     if (sp > 0) {   // 冷却剩余秒数就地可见(UX:原来只有暗条无数字)
-        long rem_s = (long)((s.rules_rt.stoke_ready_ms - now_ms + 999) / 1000);
+        stoke_rem_s = (long)((s.rules_rt.stoke_ready_ms - now_ms + 999) / 1000);
         snprintf(stbuf, sizeof(stbuf), "%s%lds",
                  s.game.fire_lv == DR_FIRE_DEAD ? "点火中·" : "添柴中·",
-                 rem_s);
+                 stoke_rem_s);
         stoke = stbuf;
     } else {
         stoke = (s.game.fire_lv == DR_FIRE_DEAD)
@@ -1138,6 +1183,10 @@ static void render_home(uint32_t now_ms) {
                     : "添柴(1木)";
     }
     set_act(&s_acts[idx], stoke, act_focus && s.focus == idx, sp);
+    // E3:冷却末 2s 暗条变琥珀(就绪前提示);其余拍保持暗条本色
+    lv_obj_set_style_bg_color(s_acts[idx].fill,
+        lv_color_hex((sp > 0 && stoke_rem_s >= 0 && stoke_rem_s <= 2)
+                         ? COL_AMBER : COL_CD), 0);
     lv_obj_set_pos(s_acts[idx].row, 0, gy);
     gy += 24;
     idx++;
@@ -1933,7 +1982,7 @@ static void render_event(void) {
     const dr_event_t *e = &ev[s.ev_idx];
     lv_obj_clear_flag(s_veil, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_dpanel, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(s_dpanel, 22, 42);   // 水平居中
+    lv_obj_set_pos(s_dpanel, 22, 42 + s.dpanel_drop * 4);   // 水平居中+上滑(T7a)
     lv_obj_set_size(s_dpanel, 196, 236);
     lv_obj_add_flag(s_dtitle, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_dbody, LV_OBJ_FLAG_HIDDEN);
@@ -1973,7 +2022,7 @@ static void render_event(void) {
 static void render_confirm(void) {
     lv_obj_clear_flag(s_veil, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_dpanel, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_pos(s_dpanel, 22, 60);   // 水平居中,垂直 (320-200)/2=60
+    lv_obj_set_pos(s_dpanel, 22, 60 + s.dpanel_drop * 4);   // 水平居中,垂直 60+上滑(T7a)
     lv_obj_set_size(s_dpanel, 196, 200);
     lv_obj_clear_flag(s_dtitle, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text(s_dtitle,
@@ -2167,6 +2216,7 @@ static const char *fab_name(uint8_t f) {
 
 static void render_fab(void) {
     render_topbar_c("制造台", ACCENT_CRAFT);
+    render_rule(44, 2, ACCENT_CRAFT);   // T7e:无页签列表页补规则线(星舰有页签不加)
     for (int i = 0; i < 4; i++) {
         cell_base(i, i * 49, 24);
         lv_obj_clear_flag(s_cells[i], LV_OBJ_FLAG_HIDDEN);
@@ -2294,6 +2344,11 @@ static void render_title(void) {
         buf[0] = 0;
     }
     lv_label_set_text(s_t_sub, buf);
+    // T7b:点燃/渐显与打字机同拍幂等推进——k 拍时火光带亮 k/6,标题显 k*85
+    lv_obj_set_style_bg_grad_opa(s_t_fire, 89 * k / 6, 0);
+    int opa = (k * 85 > 255) ? 255 : k * 85;
+    lv_obj_set_style_text_opa(s_t_big, (lv_opa_t)opa, 0);
+    lv_obj_set_style_text_opa(s_t_rule, (lv_opa_t)opa, 0);
 }
 
 static void render(void) {
@@ -2320,6 +2375,38 @@ static void render(void) {
         case PG_ENDING:  render_ending(); break;
         case PG_EXPORT:  render_export(); break;
         case PG_IMPORT:  render_import(); break;
+    }
+    // 共享焦点条定位(T7d):页面渲染完行几何后统一驱动;同页移动触发
+    // 80ms y 补间(补间中不重写位置),跨页/首现直接落位
+    lv_obj_t *bar_row = (s_bar_act != NULL) ? s_bar_act->row
+                        : (s_bar_row >= 0) ? s_list[s_bar_row].row : NULL;
+    if (bar_row != NULL && !lv_obj_has_flag(bar_row, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_update_layout(bar_row);   // set_pos 后 coords 要等布局周期,先同步
+        int bx = lv_obj_get_x(bar_row);
+        int by = lv_obj_get_y(bar_row);
+        int bw = lv_obj_get_width(bar_row);
+        lv_obj_clear_flag(s_focusbar, LV_OBJ_FLAG_HIDDEN);
+        if (!s_bar_moving) {
+            lv_obj_set_pos(s_focusbar, bx, by);
+            lv_obj_set_size(s_focusbar, bw, 18);
+            if (s_bar_shown && by != s_bar_last_y) {
+                s_bar_moving = true;
+                lv_anim_delete(s_focusbar, bar_y_cb);
+                lv_anim_t a;
+                lv_anim_init(&a);
+                lv_anim_set_var(&a, s_focusbar);
+                lv_anim_set_exec_cb(&a, bar_y_cb);
+                lv_anim_set_values(&a, s_bar_last_y, by);
+                lv_anim_set_duration(&a, 80);
+                lv_anim_set_completed_cb(&a, bar_move_done_cb);
+                lv_anim_start(&a);
+            }
+        }
+        s_bar_shown = true;
+        s_bar_last_y = by;
+    } else {
+        lv_obj_add_flag(s_focusbar, LV_OBJ_FLAG_HIDDEN);
+        s_bar_shown = false;
     }
     // 就地提示:渲染末覆盖提示行(仅对当前显示提示行的页面生效;
     // 到期由 tick 清除并触发整页重画,恢复各页自己的提示文案与暗色)
@@ -2500,12 +2587,61 @@ static void focus_move(int dir) {
     }
 }
 
+// ---- T7a 转场:切页 veil 淡入。veil 的 opa 不被 render()/clear_scene 改写
+// (只碰显隐标志),是动画安全锚点;clear_scene 在淡入进行中不藏 veil。
+static void veil_opa_cb(void *v, int32_t o) {
+    lv_obj_set_style_opa((lv_obj_t *)v, (lv_opa_t)o, 0);
+}
+
+static void veil_fade_done_cb(lv_anim_t *a) {
+    (void)a;   // veil 全局单例,无需经 anim 取回
+    s_veil_fading = false;
+    lv_obj_add_flag(s_veil, LV_OBJ_FLAG_HIDDEN);
+}
+
+// ---- T7d 共享焦点条:同页 y 补间(80ms);单例静态驱动,无跨页滑动 ----
+static void bar_y_cb(void *v, int32_t y) {
+    lv_obj_set_pos((lv_obj_t *)v, 0, y);
+}
+
+static void bar_move_done_cb(lv_anim_t *a) {
+    (void)a;
+    s_bar_moving = false;
+    lv_obj_set_pos(s_focusbar, 0, s_bar_last_y);
+}
+
+static void veil_fade_start(void) {
+    lv_anim_delete(s_veil, veil_opa_cb);   // 连切:删旧淡入再启
+    s_veil_fading = true;
+    lv_obj_clear_flag(s_veil, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_opa(s_veil, LV_OPA_COVER, 0);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_veil);
+    lv_anim_set_exec_cb(&a, veil_opa_cb);
+    lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_TRANSP);
+    lv_anim_set_duration(&a, 160);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_set_completed_cb(&a, veil_fade_done_cb);
+    lv_anim_start(&a);
+}
+
 static void page_goto(page_t p) {
     s.page = p;
     s.focus = 0;
     s.village_adj = -1;   // 离开村庄页/任意切页退出人数调节
     s.outfit_adj = -1;    // 离开整备态
     s_title_reveal_ms = 0;   // 标题打字机基准(T3):进标题页首帧重记
+    s.dpanel_drop = (p == PG_EVENT || p == PG_CONFIRM) ? 2 : 0;   // T7a 上滑
+    // T7d:切页收场——金条隐藏、补间删除、归属重置(新页由 render 尾重新注册)
+    lv_anim_delete(s_focusbar, bar_y_cb);
+    s_bar_moving = false;
+    lv_obj_add_flag(s_focusbar, LV_OBJ_FLAG_HIDDEN);
+    s_bar_act = NULL;
+    s_bar_row = -1;
+    s_bar_shown = false;
+    // T7a:非模态页切页黑场淡入;模态页 veil 作常驻背板,不淡出
+    if (p != PG_EVENT && p != PG_CONFIRM) veil_fade_start();
     // 回到小屋页 = 拜访房间(原版 onArrival):陌生人从沉睡中醒来帮忙
     if (p == PG_HOME && dr_rules_builder_visit(&s.game)) {
         log_push("她站在火边:可以帮忙了");
@@ -3227,6 +3363,11 @@ static void tick(lv_timer_t *t) {
     if (s.page == PG_TITLE && s_title_reveal_ms != 0 &&
         (int)((now_ms - s_title_reveal_ms) / 250u) < 6)
         s.dirty = true;
+    // 弹窗上滑未归位(T7a):逐拍递减驱动重绘
+    if (s.dpanel_drop > 0 && (s.page == PG_EVENT || s.page == PG_CONFIRM)) {
+        s.dpanel_drop--;
+        s.dirty = true;
+    }
 
     static uint32_t last_batt_ms = 0;
     if (last_batt_ms == 0 || now_ms - last_batt_ms >= 30000u) {
