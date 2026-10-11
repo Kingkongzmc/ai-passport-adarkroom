@@ -42,6 +42,11 @@ extern "C" {
 #define DR_FLAG_SHIP_OPEN       21u  // 星舰页签解锁(踏上坠毁星舰格,原版 features.location.spaceShip)
 #define DR_FLAG_SHIP_SEEN       22u  // 首访星舰页通知已发(原版 spaceShip.seenShip)
 #define DR_FLAG_LIFT_WARNED     23u  // 升空确认"不再回来"已见(原版 spaceShip.seenWarning)
+// M7 地标回补(§4.1.1;空位 24 起——20-23 已被窃贼/星舰占用,
+// DESIGN §9.8 补证段预估的 20-22 让位)
+#define DR_FLAG_PERK_GASTRONOME 24u  // 美食家:吃干肉回血 8→16(沼泽谈话,原版 gastronome)
+#define DR_FLAG_SWAMP_DONE      25u  // 沼泽谈话已完成(一次性,原版 markVisited)
+#define DR_FLAG_RUIN_TAKEN      26u  // 被毁村庄补给已拿(一次性;本作简化 collectStores)
 
 // ---- 资源(原版 stores;布局红线:只在尾部追加,不得中间插入) ----
 typedef enum {

@@ -671,6 +671,92 @@ static void test_m5_weapons(void) {
     assert(g5.res[DR_RES_BOLAS] == 2 && w5.carry_bolas == 0);
 }
 
+// ---- M7 地标回补(setpieces.js 2026-10-11 取证):放置/搜索/护符门/一次性 ----
+static void test_m7_landmarks(void) {
+    dr_world_t w;
+    dr_world_gen(&w, 99);
+    // 数量与半径(放置有环带尝试失败的可能,允许下限;半径为环带 ±1)
+    int bore = 0, bfield = 0, swamp = 0, ruinv = 0;
+    for (int y = 0; y < DR_WORLD_SIZE; y++)
+        for (int x = 0; x < DR_WORLD_SIZE; x++) {
+            uint8_t t = dr_world_tile(&w, x, y);
+            uint16_t d = manhattan(x, y);
+            if (t == DR_WT_BOREHOLE) { bore++;  assert(d >= 14 && d <= 46); }
+            if (t == DR_WT_BFIELD)   { bfield++;assert(d >= 17 && d <= 46); }
+            if (t == DR_WT_SWAMP)    { swamp++; assert(d >= 14 && d <= 46); }
+            if (t == DR_WT_RUINV)    { ruinv++; assert(d >= 14 && d <= 46); }
+        }
+    assert(bore >= 8 && bfield >= 4 && swamp == 1 && ruinv == 1);
+
+    dr_game_t g;
+    dr_game_init(&g, 99, 1000);
+    g.res[DR_RES_FOOD] = 10;
+    assert(dr_world_outfit_add(&w, &g, DR_RES_FOOD, 5));
+    assert(dr_world_embark(&w, &g));
+    char line[64];
+
+    // 钻孔:必得异星合金 1-3(100%,零门槛)
+    w.location = DR_WT_BOREHOLE;
+    for (int i = 0; i < 5; i++) {
+        memset(w.loot, 0, sizeof(w.loot));          // 清包隔离承重干扰
+        dr_loc_result_t r = dr_world_location_search(&w, &g, line, sizeof(line));
+        assert(r == DR_LOC_LOOT);
+        assert(w.loot[DR_RES_ALIEN] >= 1 && w.loot[DR_RES_ALIEN] <= 3);
+    }
+
+    // 战场:武器抬升不降级;资源类照常入包
+    w.location = DR_WT_BFIELD;
+    g.weapon_lv = 6;                                // 已有激光步枪
+    for (int i = 0; i < 30; i++) {
+        memset(w.loot, 0, sizeof(w.loot));
+        (void)dr_world_location_search(&w, &g, line, sizeof(line));
+        assert(g.weapon_lv == 6);                   // 不降级
+    }
+    g.weapon_lv = 0;
+    int raised = 0, saw_bullets = 0, saw_alloy = 0;
+    for (int i = 0; i < 100; i++) {
+        memset(w.loot, 0, sizeof(w.loot));
+        (void)dr_world_location_search(&w, &g, line, sizeof(line));
+        if (g.weapon_lv > 0) raised = 1;
+        if (w.loot[DR_RES_BULLETS] > 0) saw_bullets = 1;
+        if (w.loot[DR_RES_ALIEN] > 0) saw_alloy = 1;
+    }
+    assert(raised && saw_bullets && saw_alloy);     // 100 掷内三类必见
+
+    // 沼泽:护符门 + 一次性 + gastronome 回血 8→16
+    w.location = DR_WT_SWAMP;
+    g.res[DR_RES_CHARM] = 0;
+    assert(dr_world_location_search(&w, &g, line, sizeof(line)) ==
+           DR_LOC_NEED_CHARM);
+    assert(!(g.flags & ((uint64_t)1u << DR_FLAG_PERK_GASTRONOME)));
+    g.res[DR_RES_CHARM] = 1;
+    dr_loc_result_t r = dr_world_location_search(&w, &g, line, sizeof(line));
+    assert(r == DR_LOC_LOOT);
+    assert(g.res[DR_RES_CHARM] == 0);               // 护符已耗
+    assert(g.flags & ((uint64_t)1u << DR_FLAG_PERK_GASTRONOME));
+    assert(g.flags & ((uint64_t)1u << DR_FLAG_SWAMP_DONE));
+    assert(dr_world_location_search(&w, &g, line, sizeof(line)) ==
+           DR_LOC_EMPTY);                           // 永久关闭
+    g.armor_lv = 3;                                 // HP 上限 45,远离钳位
+    g.hero_hp = 10;
+    assert(dr_world_eat(&g));
+    assert(g.hero_hp == 26);                        // 10+16(美食家翻倍)
+
+    // 被毁村庄:一次性大奖(周目 1:合金+2,全资源+100,钳 999)
+    w.location = DR_WT_RUINV;
+    uint32_t alien0 = g.res[DR_RES_ALIEN];
+    g.res[DR_RES_WOOD] = 950;                       // 验证 999 钳位
+    r = dr_world_location_search(&w, &g, line, sizeof(line));
+    assert(r == DR_LOC_LOOT);
+    assert(g.flags & ((uint64_t)1u << DR_FLAG_RUIN_TAKEN));
+    assert(g.res[DR_RES_ALIEN] == alien0 + 2);
+    assert(g.res[DR_RES_WOOD] == 999);
+    assert(g.res[DR_RES_IRON] == 100);
+    assert(dr_world_location_search(&w, &g, line, sizeof(line)) ==
+           DR_LOC_EMPTY);                           // 一次性
+    dr_world_location_leave(&w);
+}
+
 int main(void) {
     test_gen();
     test_embark_and_supplies();

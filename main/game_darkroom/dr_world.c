@@ -86,6 +86,12 @@ void dr_world_gen(dr_world_t *w, uint16_t seed) {
     for (int i = 0; i < 5; i++)  place_landmark(w, &r, DR_WT_CAVE, 3 + i * 2);
     for (int i = 0; i < 10; i++) place_landmark(w, &r, DR_WT_TOWN, 10 + (i * 2) % 11);
     for (int i = 0; i < 20; i++) place_landmark(w, &r, DR_WT_CITY, 20 + (i * 2) % 26);
+    // M7 回补(2026-10-11 setpieces.js 取证):
+    // 钻孔×10 r15-45 / 战场×5 r18-45 / 沼泽×1 r15-45 / 被毁村庄×1 r15-45
+    for (int i = 0; i < 10; i++) place_landmark(w, &r, DR_WT_BOREHOLE, 15 + (i * 3) % 31);
+    for (int i = 0; i < 5; i++)  place_landmark(w, &r, DR_WT_BFIELD, 18 + (i * 5) % 28);
+    place_landmark(w, &r, DR_WT_SWAMP, 15 + (int)dr_rng_below(&r, 31));
+    place_landmark(w, &r, DR_WT_RUINV, 15 + (int)dr_rng_below(&r, 31));
     // 星舰(r28)与补给路:哨站只在通往星舰的路上(原版),间隔 8 格补水
     int sx = (dr_rng_below(&r, 2) == 0) ? 1 : -1;
     int sy = (dr_rng_below(&r, 2) == 0) ? 1 : -1;
@@ -304,6 +310,10 @@ dr_move_result_t dr_world_move(dr_world_t *w, dr_game_t *g, int dx, int dy) {
         case DR_WT_CAVE:     w->location = DR_WT_CAVE;   return DR_MOVE_CAVE;
         case DR_WT_TOWN:     w->location = DR_WT_TOWN;   return DR_MOVE_TOWN;
         case DR_WT_CITY:     w->location = DR_WT_CITY;   return DR_MOVE_CITY;
+        case DR_WT_BOREHOLE: w->location = DR_WT_BOREHOLE; return DR_MOVE_BOREHOLE;
+        case DR_WT_BFIELD:   w->location = DR_WT_BFIELD;   return DR_MOVE_BFIELD;
+        case DR_WT_SWAMP:    w->location = DR_WT_SWAMP;    return DR_MOVE_SWAMP;
+        case DR_WT_RUINV:    w->location = DR_WT_RUINV;    return DR_MOVE_RUINV;
         default:             return DR_MOVE_OK;
     }
 }
@@ -576,11 +586,17 @@ dr_fight_result_t dr_world_fight_bolas(dr_world_t *w, dr_game_t *g) {
     return DR_FIGHT_STUN;
 }
 
+// 干肉回血量:美食家 Perk 翻倍(原版 world.js:546 MEAT_HEAL×2)
+static uint8_t meat_heal(const dr_game_t *g) {
+    return (g->flags & ((uint64_t)1u << DR_FLAG_PERK_GASTRONOME)) ? 16u : 8u;
+}
+
 dr_fight_result_t dr_world_fight_eat(dr_world_t *w, dr_game_t *g) {
     if (!dr_world_fight_active(w) || g->food == 0) return DR_FIGHT_NONE;
     g->food--;
     uint8_t cap = dr_world_health_cap(g);
-    g->hero_hp = (g->hero_hp > cap - 8u) ? cap : (uint8_t)(g->hero_hp + 8u);
+    uint8_t heal = meat_heal(g);
+    g->hero_hp = (g->hero_hp > cap - heal) ? cap : (uint8_t)(g->hero_hp + heal);
     dr_fight_result_t out;
     enemy_turn(w, g, fight_rng(g), &out);
     return out;
@@ -618,6 +634,10 @@ const char *dr_world_location_name(uint8_t tile) {
         case DR_WT_CAVE:  return "潮湿洞穴";
         case DR_WT_TOWN:  return "废镇";
         case DR_WT_CITY:  return "废墟城市";
+        case DR_WT_BOREHOLE: return "钻孔";
+        case DR_WT_BFIELD:   return "战场";
+        case DR_WT_SWAMP:    return "沼泽";
+        case DR_WT_RUINV:    return "残村";
         default:          return "";
     }
 }
@@ -726,18 +746,85 @@ dr_loc_result_t dr_world_location_search(dr_world_t *w, dr_game_t *g,
                        (unsigned long)loot_add(w, g, DR_RES_BULLETS, b));
                 return DR_LOC_LOOT;
             }
+        // ---- M7 回补(setpieces.js 2026-10-11 逐场景取证) ----
+        case DR_WT_BOREHOLE: {  // 钻孔:搜索必得异星合金 1-3(100%,零门槛零战斗)
+            uint32_t n = 1 + dr_rng_below(r, 3);
+            APPEND("异星合金+%lu", (unsigned long)loot_add(w, g, DR_RES_ALIEN, n));
+            return DR_LOC_LOOT;
+        }
+        case DR_WT_BFIELD: {    // 战场:一次性多掷(步枪@50%/子弹5-20@80%/
+                                // 激光枪@30%/元件5-10@50%/手雷1-5@50%/异金1@30%)
+            // 步枪/激光枪在原版是武器获取而非资源:本作实现为武器阶抬升
+            // (不降级;资源类照常入包)
+            bool got = false;
+            if (dr_rng_chance(r, 500) && g->weapon_lv < 4) {
+                g->weapon_lv = 4; APPEND("步枪 "); got = true;
+            }
+            if (dr_rng_chance(r, 300) && g->weapon_lv < 6) {
+                g->weapon_lv = 6; APPEND("激光步枪 "); got = true;
+            }
+            uint32_t bu = dr_rng_chance(r, 800) ? 5 + dr_rng_below(r, 16) : 0;
+            uint32_t ce = dr_rng_chance(r, 500) ? 5 + dr_rng_below(r, 6) : 0;
+            uint32_t gr = dr_rng_chance(r, 500) ? 1 + dr_rng_below(r, 5) : 0;
+            uint32_t al = dr_rng_chance(r, 300) ? 1 : 0;
+            bu = loot_add(w, g, DR_RES_BULLETS, bu);
+            ce = loot_add(w, g, DR_RES_ENERGY_CELL, ce);
+            gr = loot_add(w, g, DR_RES_GRENADE, gr);
+            al = loot_add(w, g, DR_RES_ALIEN, al);
+            if (bu) { APPEND("子弹+%lu ", (unsigned long)bu); got = true; }
+            if (ce) { APPEND("元件+%lu ", (unsigned long)ce); got = true; }
+            if (gr) { APPEND("手雷+%lu ", (unsigned long)gr); got = true; }
+            if (al) { APPEND("异星合金+%lu", (unsigned long)al); got = true; }
+            return got ? DR_LOC_LOOT : DR_LOC_EMPTY;
+        }
+        case DR_WT_SWAMP:       // 幽暗沼泽:小屋 1 护符换谈话 → 美食家 Perk(一次性)
+            if (g->flags & ((uint64_t)1u << DR_FLAG_SWAMP_DONE))
+                return DR_LOC_EMPTY;
+            if (g->res[DR_RES_CHARM] < 1) return DR_LOC_NEED_CHARM;
+            g->res[DR_RES_CHARM]--;
+            g->flags |= (uint64_t)1u << DR_FLAG_PERK_GASTRONOME |
+                        (uint64_t)1u << DR_FLAG_SWAMP_DONE;
+            APPEND("学会美食家:干肉回血 8 升 16");
+            return DR_LOC_LOOT;
+        case DR_WT_RUINV: {     // 被毁村庄:小屋仍有补给,一次性继承大奖
+            // 本作口径(2026-10-11 拍板):不做跨周目 collectStores(需跨存档
+            // 持久段,legacy 段语义不支持),简化为 周目数×(异星合金2 + 全资源
+            // ×100),各资源存量钳至 999;直接入库存(原版 collectStores 同义,
+            // 不经背袋承重)。
+            if (g->flags & ((uint64_t)1u << DR_FLAG_RUIN_TAKEN))
+                return DR_LOC_EMPTY;
+            g->flags |= (uint64_t)1u << DR_FLAG_RUIN_TAKEN;
+            uint32_t run = (uint32_t)g->prestige_count + 1u;
+            uint32_t alloy = 2u * run;
+            if (g->res[DR_RES_ALIEN] + alloy > 999u)
+                alloy = 999u - g->res[DR_RES_ALIEN];
+            g->res[DR_RES_ALIEN] += alloy;
+            g->res_total[DR_RES_ALIEN] += alloy;
+            uint32_t each = 100u * run;
+            for (int i = 0; i < DR_RES_KIND_COUNT; i++) {
+                if (i == DR_RES_ALIEN) continue;
+                uint32_t n = each;
+                if (g->res[i] + n > 999u) n = 999u - g->res[i];
+                g->res[i] += n;
+                g->res_total[i] += n;
+            }
+            APPEND("继承补给:异星合金+%lu 全资源+%lu",
+                   (unsigned long)alloy, (unsigned long)each);
+            return DR_LOC_LOOT;
+        }
         default:
             return DR_LOC_NONE;
     }
 #undef APPEND
 }
 
-// 远征中吃干肉:回 8 HP(原版 meat heal 8)
+// 远征中吃干肉:回 8 HP(原版 meat heal 8;美食家 Perk 翻倍)
 bool dr_world_eat(dr_game_t *g) {
     if (!g->in_wilderness || g->food == 0) return false;
     g->food--;
     uint8_t cap = dr_world_health_cap(g);
-    g->hero_hp = (g->hero_hp > cap - 8u) ? cap : (uint8_t)(g->hero_hp + 8u);
+    uint8_t heal = meat_heal(g);
+    g->hero_hp = (g->hero_hp > cap - heal) ? cap : (uint8_t)(g->hero_hp + heal);
     return true;
 }
 

@@ -145,8 +145,9 @@ static struct {
     uint32_t toast_until_ms;
     uint32_t toast_col;        // 提示条颜色(T4:金=反馈,红=威胁)
     uint8_t dpanel_drop;       // 弹窗上滑入场剩余拍数(T7a:8/4/0 三档)
-    bool log_browse;           // 主页日志浏览态(T8:下过末行动作进入,确定退出)
-    uint8_t log_off;           // 浏览滚动偏移(0=最新在顶,上限 cnt-8)
+    bool log_focus;            // 日志窗聚焦态(T8:光标停在日志窗,未选中)
+    bool log_browse;           // 日志窗选中态(T8:OK 选中后上下滚列表;再按 OK 取消)
+    uint8_t log_off;           // 选中态浏览偏移(0=最新在顶,上限 cnt-8)
     dr_game_t game;
     dr_rules_rt_t rules_rt;
     dr_event_session_t ev_sess;
@@ -200,7 +201,7 @@ static actrow_t s_dacts[5];   // 弹窗选项行(M6 切片二:游牧商人 5 选
 // 地图/房间格阵 + 图例 + 血条
 #define MAP_CELLS 81
 static lv_obj_t *s_map[MAP_CELLS];
-#define LEG_KINDS 14                   // 图例:全量地块色(地形/村庄/主角/矿/地点)
+#define LEG_KINDS 18                   // 图例:全量地块色(地形/村庄/主角/矿/地点)
 static lv_obj_t *s_legchip[LEG_KINDS], *s_legtxt[LEG_KINDS];
 #define ROOM_CELLS 9
 static lv_obj_t *s_room[ROOM_CELLS];
@@ -728,26 +729,32 @@ static void build_ui(void) {
         lv_obj_set_style_bg_color(s_map[i], lv_color_hex(COL_BG), 0);
         lv_obj_set_style_pad_all(s_map[i], 0, 0);
     }
-    // 全量图例(远征态,地图右侧双列 7 行):色块+短名,覆盖全部地块色。
+    // 全量图例(远征态,地图右侧双列 9 行):色块+短名,覆盖全部地块色。
     // 左列=地形与核心,右列=矿与地点;三地形色块与地图同款纹样。
+    // 18 项后行距 14→12(尾行止 140,仍在地图带内);4 新地标色见 map_tile_color。
     static const struct {
         uint32_t col; const char *name; const lv_image_dsc_t *pat;
     } k_leg[LEG_KINDS] = {
-        { 0x2E5E1E, "森林", &k_pat_dots },  { 0x707078, "铁矿", NULL },
-        { 0xC8B84B, "田野", &k_pat_hstrip },{ 0x26262E, "煤矿", NULL },
-        { 0x967850, "荒地", &k_pat_diag },  { 0x9B8C34, "硫矿", NULL },
-        { COL_GOLD, "村庄", NULL },          { 0x965F37, "老屋", NULL },
-        { COL_ME,   "你",   NULL },          { 0x4B64BE, "洞穴", NULL },
-        { 0x9AE8E8, "哨站", NULL },          { 0xF29E9E, "废镇", NULL },
-        { 0xC060D8, "星舰", NULL },          { 0x5A3A90, "城市", NULL },
+        // 左列(前 9):地形与核心
+        { 0x2E5E1E, "森林", &k_pat_dots },  { 0xC8B84B, "田野", &k_pat_hstrip },
+        { 0x967850, "荒地", &k_pat_diag },  { COL_GOLD, "村庄", NULL },
+        { COL_ME,   "你",   NULL },          { 0x9AE8E8, "哨站", NULL },
+        { 0xC060D8, "星舰", NULL },          { 0x2E2A6B, "钻孔", NULL },
+        { 0x75465D, "战场", NULL },
+        // 右列(后 9):矿与地点
+        { 0x707078, "铁矿", NULL },          { 0x26262E, "煤矿", NULL },
+        { 0x9B8C34, "硫矿", NULL },          { 0x965F37, "老屋", NULL },
+        { 0x4B64BE, "洞穴", NULL },          { 0xF29E9E, "废镇", NULL },
+        { 0x5A3A90, "城市", NULL },          { 0x589E8C, "沼泽", NULL },
+        { 0x230412, "残村", NULL },
     };
     {
         static const int colx[2] = { 116, 158 };   // 双列 x(列宽 42,尾列止 193)
         for (int i = 0; i < LEG_KINDS; i++) {
-            int x = colx[i / 7];
-            int y = 44 + (i % 7) * 14;             // 7 行 × 14,与地图带同高
+            int x = colx[i / 9];
+            int y = 44 + (i % 9) * 12;             // 9 行 × 12,与地图带同高
             s_legchip[i] = lv_obj_create(s_content);
-            lv_obj_set_pos(s_legchip[i], x, y + 2);
+            lv_obj_set_pos(s_legchip[i], x, y + 1);
             lv_obj_set_size(s_legchip[i], 10, 10);
             lv_obj_set_style_radius(s_legchip[i], 1, 0);
             lv_obj_set_style_bg_color(s_legchip[i], lv_color_hex(k_leg[i].col), 0);
@@ -755,7 +762,7 @@ static void build_ui(void) {
             lv_obj_set_style_border_width(s_legchip[i], 0, 0);
             lv_obj_set_style_pad_all(s_legchip[i], 0, 0);
             s_legtxt[i] = label_new(s_content, &dr_font_12, lv_color_hex(COL_DIM),
-                                    x + 13, y, 26, 14);
+                                    x + 13, y, 26, 12);
             lv_label_set_text(s_legtxt[i], k_leg[i].name);
         }
     }
@@ -828,6 +835,10 @@ static uint32_t ruin_accent(void) {
         case DR_WT_CAVE:  return 0x8AA0E8;
         case DR_WT_TOWN:  return 0xF29E9E;
         case DR_WT_CITY:  return 0xA488D8;
+        case DR_WT_BOREHOLE: return 0x8D84E8;   // 深靛蓝提亮
+        case DR_WT_BFIELD:   return 0xD08CA2;   // 暗锈红提亮
+        case DR_WT_SWAMP:    return 0x8FD8C0;   // 青绿提亮
+        case DR_WT_RUINV:    return 0xC08A9A;   // 焦黑提亮(余烬色)
         default:          return COL_DIM;
     }
 }
@@ -953,7 +964,7 @@ static void render_home_log(int n_acts, int act_top) {
     lv_obj_clear_flag(s_logpanel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(s_logpanel, 0, 86);
     lv_obj_set_size(s_logpanel, 198, act_top - 90);
-    // 浏览窗(T8):off=0 最新在顶;浏览时窗口滑向更早记录
+    // 浏览窗(T8):选中态 off 生效,窗口滑向更早记录;聚焦/普通态 off=0
     int off = s.log_browse ? s.log_off : 0;
     int max_off = (s_log_cnt > LOG_VIS) ? s_log_cnt - LOG_VIS : 0;
     if (off > max_off) off = max_off;
@@ -967,12 +978,15 @@ static void render_home_log(int n_acts, int act_top) {
         lv_label_set_text(l, e);
         lv_obj_set_style_text_color(l, log_fade(a, s_log_cnt, log_base(a)), 0);
     }
-    // 最新一行锚点条(T7e):静止(非浏览)且有日志时点亮
-    if (show > 0 && s_log_cnt > 0 && !s.log_browse) {
+    // 日志窗聚焦/选中态(T8):面板边框金描边(选中=金+右缘滚动条)
+    lv_obj_set_style_border_color(s_logpanel,
+        lv_color_hex((s.log_focus || s.log_browse) ? COL_GOLD : COL_RULE), 0);
+    // 最新一行锚点条(T7e):静止(未聚焦/未选中)且有日志时点亮
+    if (show > 0 && s_log_cnt > 0 && !s.log_focus && !s.log_browse) {
         lv_obj_clear_flag(s_logtick, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_pos(s_logtick, 1, 92);
     }
-    // 浏览滚动指示条(T8):复用轨道/滑块,置于面板右缘
+    // 选中态滚动指示条(T8):复用轨道/滑块,置于面板右缘
     if (s.log_browse && s_log_cnt > LOG_VIS && act_top - 94 > 12) {
         int tr_h = act_top - 94;
         int th = tr_h * LOG_VIS / s_log_cnt;
@@ -1183,7 +1197,7 @@ static void render_home(uint32_t now_ms) {
         lv_obj_set_style_text_align(s_acts[i].lbl, LV_TEXT_ALIGN_LEFT, 0);
     }
     int idx = 0;
-    bool act_focus = (s.nav_focus < 0) && !s.log_browse;   // 页签/日志浏览态时动作区去焦点(T8)
+    bool act_focus = (s.nav_focus < 0) && !s.log_focus;   // 页签/日志窗聚焦时动作区去焦点(T8)
     bool no_wood = s.game.res[DR_RES_WOOD] < DR_FIRE_LIGHT_COST;
     int sp = stoke_pct(now_ms);
     char stbuf[24];
@@ -1501,6 +1515,8 @@ static uint32_t map_tile_color(uint8_t t, bool seen) {
     // 色弱适配(2026-10-05):全部色值经绿色盲模拟复核,易混组拉开亮度档
     // (煤矿38/城市72/老屋107/铁矿112/硫矿137/你162/废镇180/村庄·哨站210);
     // 三地形另叠纹样(点/横线/斜线)做第二编码,见 k_pat_*。
+    // M7 回补 4 色(2026-10-11 Machado 矩阵核验,与全部既有色两两
+    // 模拟距离≥60 或 ΔL≥25):钻孔48/战场84/沼泽138(与硫矿色相远)/残村13。
     switch ((dr_world_tile_t)t) {
         case DR_WT_VILLAGE:   return COL_GOLD;
         case DR_WT_FOREST:    return 0x2E5E1E;
@@ -1515,6 +1531,10 @@ static uint32_t map_tile_color(uint8_t t, bool seen) {
         case DR_WT_CAVE:      return 0x4B64BE;
         case DR_WT_TOWN:      return 0xF29E9E;
         case DR_WT_CITY:      return 0x5A3A90;
+        case DR_WT_BOREHOLE:  return 0x2E2A6B;   // 深靛蓝(原案深灰蓝,让位分档)
+        case DR_WT_BFIELD:    return 0x75465D;   // 暗锈红
+        case DR_WT_SWAMP:     return 0x589E8C;   // 青绿
+        case DR_WT_RUINV:     return 0x230412;   // 焦黑
         default:              return COL_BG;
     }
 }
@@ -1534,6 +1554,10 @@ static const char *map_tile_name(uint8_t t) {
         case DR_WT_CAVE:     return "洞穴";
         case DR_WT_TOWN:     return "废镇";
         case DR_WT_CITY:     return "城市";
+        case DR_WT_BOREHOLE: return "钻孔";
+        case DR_WT_BFIELD:   return "战场";
+        case DR_WT_SWAMP:    return "沼泽";
+        case DR_WT_RUINV:    return "残村";
         default:             return "?";
     }
 }
@@ -1702,19 +1726,48 @@ static void render_ruin(void) {
     }
     bool has_torch =
         (s.game.flags & ((uint64_t)1u << DR_FLAG_TORCH)) != 0;
-    set_row(0, 150, "搜索", "再掷一次", s.focus == 0, false);
+    uint8_t loc = dr_world_location(&s_world);
+    // 搜索行定制(M7 回补):沼泽=护符换谈话(无护符/已谈过灰显),
+    // 残村=一次性拿补给(已拿灰显);灰显仍可按下,逻辑层回报原因
+    const char *sv = "再掷一次";
+    bool slock = false;
+    if (loc == DR_WT_SWAMP) {
+        if (s.game.flags & ((uint64_t)1u << DR_FLAG_SWAMP_DONE)) {
+            sv = "已谈过"; slock = true;
+        } else if (s.game.res[DR_RES_CHARM] < 1) {
+            sv = "没有护符"; slock = true;
+        } else {
+            sv = "1 护符换谈话";
+        }
+    } else if (loc == DR_WT_RUINV) {
+        if (s.game.flags & ((uint64_t)1u << DR_FLAG_RUIN_TAKEN)) {
+            sv = "已拿空"; slock = true;
+        } else {
+            sv = "拿取补给";
+        }
+    }
+    set_row(0, 150, "搜索", sv, s.focus == 0, slock);
     set_row(1, 174, "离开地点", "回荒野", s.focus == 1, false);
     for (int i = 2; i < LIST_ROWS; i++)
         lv_obj_add_flag(s_list[i].row, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(s_hint, 0, 200);
-    uint8_t loc = dr_world_location(&s_world);
     lv_label_set_text(s_hint,
         loc == DR_WT_CAVE
             ? (has_torch ? "洞穴幽深;火把只够一次深入" : "需要火把(工坊:1木1布)")
         : loc == DR_WT_HOUSE ? "老屋:也许有药,也许有埋伏"
         : loc == DR_WT_TOWN  ? "废镇:学校与医院,或街头伏击"
         : loc == DR_WT_CITY  ? "废墟城市:空楼,士兵,或值钱的物资"
+        : loc == DR_WT_BOREHOLE ? "钻孔:深处必见异星合金"
+        : loc == DR_WT_BFIELD   ? "战场:散落的军械,也许有合金"
+        : loc == DR_WT_SWAMP
+            ? ((s.game.flags & ((uint64_t)1u << DR_FLAG_SWAMP_DONE))
+                   ? "沼泽重归寂静"
+                   : "小屋里住着老者:一枚护符换一次谈话")
+        : loc == DR_WT_RUINV
+            ? ((s.game.flags & ((uint64_t)1u << DR_FLAG_RUIN_TAKEN))
+                   ? "残村什么都不剩了"
+                   : "被毁的村庄:小屋里仍有补给")
                               : "");
 }
 
@@ -2215,7 +2268,7 @@ static void render_ship(void) {
     lv_obj_clear_flag(s_hint, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(s_hint, 0, 236);
     if (no_alloy) {
-        lv_label_set_text(s_hint, "异星合金:贸易/病人/城市深处");
+        lv_label_set_text(s_hint, "异星合金:钻孔必得,战场/贸易/病人");
     } else {
         char h[40];
         snprintf(h, sizeof(h), "推进%u 磨难段%u(段均船壳-1)",
@@ -2651,7 +2704,8 @@ static void page_goto(page_t p) {
     s.outfit_adj = -1;    // 离开整备态
     s_title_reveal_ms = 0;   // 标题打字机基准(T3):进标题页首帧重记
     s.dpanel_drop = (p == PG_EVENT || p == PG_CONFIRM) ? 2 : 0;   // T7a 上滑
-    s.log_browse = false;   // T8:浏览态只在主页存续,切页即退
+    s.log_focus = false;    // T8:日志窗聚焦/选中态只在主页存续,切页即退
+    s.log_browse = false;
     s.log_off = 0;
     // T7d:切页收场——金条隐藏、补间删除、归属重置(新页由 render 尾重新注册)
     lv_anim_delete(s_focusbar, bar_y_cb);
@@ -2917,7 +2971,11 @@ static void list_action(int idx) {
                     case DR_MOVE_HOUSE:
                     case DR_MOVE_CAVE:
                     case DR_MOVE_TOWN:
-                    case DR_MOVE_CITY: {
+                    case DR_MOVE_CITY:
+                    case DR_MOVE_BOREHOLE:
+                    case DR_MOVE_BFIELD:
+                    case DR_MOVE_SWAMP:
+                    case DR_MOVE_RUINV: {
                         char msg[48];
                         snprintf(msg, sizeof(msg), "来到了%s",
                                  dr_world_location_name(dr_world_location(
@@ -3051,6 +3109,7 @@ static void list_action(int idx) {
                 }
                 case DR_LOC_EMPTY:      log_push("这里被搜空了"); toast("被搜空了"); break;
                 case DR_LOC_NEED_TORCH: log_push("需要火把(工坊:1木1布)"); toast("需要火把"); break;
+                case DR_LOC_NEED_CHARM: log_push("老者要一枚护符(陷阱偶得)"); toast("需要护符"); break;
                 default: break;
             }
             s.dirty = true;
@@ -3659,7 +3718,9 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
             s.dirty = true;
             return;
         }
-        // 主页日志浏览(T8):按住上/下连续滚窗(节流同 100ms)
+        // 主页日志浏览(T8):选中态按住上/下连续滚窗(节流同 100ms);
+        // 仅聚焦未选中时连发无意义,直接吞掉
+        if (s.page == PG_HOME && s.log_focus && !s.log_browse) return;
         if (s.page == PG_HOME && s.log_browse) {
             int max_off = (s_log_cnt > LOG_VIS) ? s_log_cnt - LOG_VIS : 0;
             if (btn == BSP_BTN_UP && s.log_off > 0) {
@@ -3798,11 +3859,11 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
             s.dirty = true;
             return;
         }
-        // 主页日志浏览(T8):下键越过末行动作进入(有更早记录时);
-        // 浏览态上/下滚窗,确定退出回动作区
+        // 主页日志窗(T8):下过末行动作 → 聚焦日志窗(金描边);
+        // 聚焦态 OK=选中(滚窗可滚)/上=回动作区;选中态 OK=取消选中
         if (s.page == PG_HOME && s.log_browse) {
             if (btn == BSP_BTN_OK) {
-                s.log_browse = false;
+                s.log_browse = false;   // 取消选中,保持聚焦
                 s.dirty = true;
                 return;
             }
@@ -3816,10 +3877,22 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
             }
             return;
         }
+        if (s.page == PG_HOME && s.log_focus) {
+            if (btn == BSP_BTN_OK) {
+                s.log_browse = true;   // 选中:滚窗生效+右缘滚动条
+                s.dirty = true;
+                return;
+            }
+            if (btn == BSP_BTN_UP) {
+                s.log_focus = false;   // 上=回动作区末行
+                s.dirty = true;
+                return;
+            }
+            return;   // 聚焦态下键无动作(已是焦点链末端)
+        }
         if (s.page == PG_HOME && btn == BSP_BTN_DOWN && s.nav_focus < 0 &&
-            s.focus == home_lines() - 1 && s_log_cnt > LOG_VIS) {
-            s.log_browse = true;   // 下过末行 → 进入日志浏览
-            s.log_off = 0;
+            s.focus == home_lines() - 1) {
+            s.log_focus = true;   // 下过末行 → 聚焦日志窗
             s.dirty = true;
             return;
         }

@@ -32,6 +32,11 @@ typedef enum {
     DR_WT_CAVE,         // 潮湿洞穴 ×5(r3-10;需火把)
     DR_WT_TOWN,         // 废镇 ×10(r10-20)
     DR_WT_CITY,         // 废墟城市 ×20(r20-45)
+    // M7 回补(2026-10-11 setpieces.js 取证;经济闭环缺口,尾插不改历史序号)
+    DR_WT_BOREHOLE,     // 钻孔 ×10(r15-45;必得异星合金 1-3)
+    DR_WT_BFIELD,       // 战场 ×5(r18-45;武器+军械+合金一次性多掷)
+    DR_WT_SWAMP,        // 幽暗沼泽 ×1(r15-45;1 护符换谈话 → 美食家 Perk)
+    DR_WT_RUINV,        // 被毁村庄 ×1(r15-45;一次性继承补给大奖)
     DR_WT_KIND_COUNT,
 } dr_world_tile_t;
 
@@ -91,13 +96,17 @@ typedef enum {
     DR_MOVE_TOWN,          // 踏上废镇
     DR_MOVE_CITY,          // 踏上废墟城市
     DR_MOVE_BLOCKED,       // 出界
+    DR_MOVE_BOREHOLE,      // 踏上钻孔(M7 回补)
+    DR_MOVE_BFIELD,        // 踏上战场
+    DR_MOVE_SWAMP,         // 踏上幽暗沼泽
+    DR_MOVE_RUINV,         // 踏上被毁村庄
 } dr_move_result_t;
 
 // 移动一格(东/南/西/北):迷雾点亮半径 2;水每步 1、干肉每 2 步 1;
 // 断水/断粮先警告后死亡(原版 useSupplies 口径)。
 dr_move_result_t dr_world_move(dr_world_t *w, dr_game_t *g, int dx, int dy);
 
-// 远征中吃干肉:回 8 HP(原版 meat heal 8)
+// 远征中吃干肉:回 8 HP(原版 meat heal 8;美食家 Perk 16)
 bool dr_world_eat(dr_game_t *g);
 
 // 远征中断电/重启的兜底:物资已在出发时扣除,直接判死亡回家。
@@ -180,6 +189,7 @@ typedef enum {
     DR_LOC_FIGHT,       // 触发战斗(fight_* 已就绪,进战斗页)
     DR_LOC_EMPTY,       // 一无所获
     DR_LOC_NEED_TORCH,  // 需要火把才能深入
+    DR_LOC_NEED_CHARM,  // 需要护符(沼泽谈话;原版 setpieces swamp)
 } dr_loc_result_t;
 // 搜索当前地点一次(洞穴消耗火把标记);loot 文案摘要写入 out(可 NULL)
 dr_loc_result_t dr_world_location_search(dr_world_t *w, dr_game_t *g,

@@ -664,7 +664,8 @@ static const uint8_t k_prestige_a[] = {
      ((uint64_t)1u << DR_FLAG_PERK_EVASIVE) | \
      ((uint64_t)1u << DR_FLAG_PERK_PRECISE) | \
      ((uint64_t)1u << DR_FLAG_PERK_BARBARIAN) | \
-     ((uint64_t)1u << DR_FLAG_PERK_STEALTHY))
+     ((uint64_t)1u << DR_FLAG_PERK_STEALTHY) | \
+     ((uint64_t)1u << DR_FLAG_PERK_GASTRONOME))
 
 void dr_prestige_save(dr_game_t *g, dr_rng_t *rng) {
     memset(g->legacy_res, 0, sizeof(g->legacy_res));
