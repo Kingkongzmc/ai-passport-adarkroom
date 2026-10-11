@@ -1094,8 +1094,11 @@ static void clear_scene(void) {
     lv_obj_add_flag(s_jobpanel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_sep, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_logtick, LV_OBJ_FLAG_HIDDEN);
-    // 焦点条(T7d)不在此隐藏/重置:它的显隐与归属由 render() 尾全权驱动,
-    // 页面存续期的补间不能被中间渲染打断;切页时由 page_goto 统一收场
+    // 焦点条归属每渲染重置(T7d):页面渲染经 set_act/set_row 重新注册;
+    // 无注册(日志聚焦/页签/选中等无反色行状态)= render 尾自动藏条。
+    // 显隐与补间状态(shown/last_y/moving)不在此动,保同页滑动连续性
+    s_bar_act = NULL;
+    s_bar_row = -1;
     lv_obj_add_flag(s_strack, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_sthumb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_t_big, LV_OBJ_FLAG_HIDDEN);
@@ -3856,11 +3859,6 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
                 if (go) { s.nav_focus = -1; s.focus = 0; }
                 s.dirty = true;
             }
-            return;
-        }
-        if (s.page == PG_HOME && btn == BSP_BTN_UP && s.focus == 0) {
-            s.nav_focus = 0;   // 从动作区顶端向上进入导航栏
-            s.dirty = true;
             return;
         }
         // 主页日志窗(T8 二版):按屏幕顺序导航——点火上键=聚焦日志窗
