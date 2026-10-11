@@ -1055,6 +1055,10 @@ static void set_row(int i, int y, const char *t, const char *v,
     if (inv) {
         s_bar_act = NULL;
         s_bar_row = i;
+    } else if (focus) {
+        // 焦点行处于锁定(或翻转为锁定,如沼泽谈话后/残村拿空后):
+        // 条归属不更新会沿旧行残留"金条压金字"——锁行只留金色文字
+        s_bar_row = -1;
     }
     int ty = inv ? 3 : 1;
     lv_label_set_text(r->mark, focus ? ">" : "");
@@ -3859,8 +3863,9 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
             s.dirty = true;
             return;
         }
-        // 主页日志窗(T8):下过末行动作 → 聚焦日志窗(金描边);
-        // 聚焦态 OK=选中(滚窗可滚)/上=回动作区;选中态 OK=取消选中
+        // 主页日志窗(T8 二版):按屏幕顺序导航——点火上键=聚焦日志窗
+        // (面板在动作区正上方);聚焦态:下=回点火/上=进页签/OK=选中;
+        // 选中态:上/下滚列表,OK=取消选中(保持聚焦)
         if (s.page == PG_HOME && s.log_browse) {
             if (btn == BSP_BTN_OK) {
                 s.log_browse = false;   // 取消选中,保持聚焦
@@ -3883,16 +3888,23 @@ static void handle_key(bsp_btn_t btn, bsp_btn_ev_t ev, uint32_t ev_ms) {
                 s.dirty = true;
                 return;
             }
-            if (btn == BSP_BTN_UP) {
-                s.log_focus = false;   // 上=回动作区末行
+            if (btn == BSP_BTN_DOWN) {
+                s.log_focus = false;   // 下=回动作区首行(点火)
+                s.focus = 0;
                 s.dirty = true;
                 return;
             }
-            return;   // 聚焦态下键无动作(已是焦点链末端)
+            if (btn == BSP_BTN_UP) {
+                s.log_focus = false;   // 上=进页签(屏幕顺序向上)
+                s.nav_focus = 0;
+                s.dirty = true;
+                return;
+            }
+            return;
         }
-        if (s.page == PG_HOME && btn == BSP_BTN_DOWN && s.nav_focus < 0 &&
-            s.focus == home_lines() - 1) {
-            s.log_focus = true;   // 下过末行 → 聚焦日志窗
+        if (s.page == PG_HOME && btn == BSP_BTN_UP && s.focus == 0 &&
+            s.nav_focus < 0) {
+            s.log_focus = true;   // 点火上键 → 聚焦日志窗(正上方)
             s.dirty = true;
             return;
         }

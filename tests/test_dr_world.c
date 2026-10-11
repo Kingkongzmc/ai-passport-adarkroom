@@ -706,6 +706,7 @@ static void test_m7_landmarks(void) {
 
     // 战场:武器抬升不降级;资源类照常入包
     w.location = DR_WT_BFIELD;
+    g.flags |= (uint64_t)1u << DR_FLAG_CONVOY;      // 车队容量 70:免承重截断
     g.weapon_lv = 6;                                // 已有激光步枪
     for (int i = 0; i < 30; i++) {
         memset(w.loot, 0, sizeof(w.loot));
@@ -772,6 +773,7 @@ int main(void) {
     test_city_cleared();
     test_scout_reveal();
     test_m5_weapons();
+    test_m7_landmarks();
     printf("test_dr_world: all passed\n");
     return 0;
 }
