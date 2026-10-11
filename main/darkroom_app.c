@@ -401,7 +401,17 @@ static void set_story(const char *text) {
 static lv_obj_t *s_t_big, *s_t_sub;    // 标题页大标题/副文案(专用)
 static lv_obj_t *s_t_ok;
 static lv_obj_t *s_t_rule, *s_t_fire;  // 顶饰线+火光带(美化 T3)
+static lv_obj_t *s_t_core;             // 火芯亮条(T9)
+static lv_obj_t *s_t_flame[3];         // 火舌×3(T9,闪烁)
+static lv_obj_t *s_t_ember[3];         // 余烬×3(T9,上飘)
 static uint32_t s_title_reveal_ms;     // 副标题打字机基准(0=未开始)
+static uint16_t s_title_beat;          // 火焰动效拍(T9;静默 15s 冻结)
+// T9 火舌几何(x,宽,高,基础不透明度)与余烬横向基准——build_ui 与
+// render_title 共用,改一处两处生效
+static const struct { int x, w, h, opa; } k_t_fl[3] = {
+    { 34, 16, 12, 62 }, { 88, 26, 18, 78 }, { 146, 14, 10, 56 },
+};
+static const int k_t_emb_x[3] = { 46, 96, 148 };
 
 // 地形纹样描述符(定义见文件后部,图例在此先取址)
 static const lv_image_dsc_t k_pat_dots, k_pat_hstrip, k_pat_diag;
@@ -716,6 +726,37 @@ static void build_ui(void) {
     lv_obj_set_style_bg_grad_opa(s_t_fire, 89, 0);
     lv_obj_set_style_bg_grad_dir(s_t_fire, LV_GRAD_DIR_VER, 0);
     lv_obj_clear_flag(s_t_fire, LV_OBJ_FLAG_SCROLLABLE);
+    // T9 火焰分层:亮芯(火床)+ 火舌×3(错位闪烁)+ 余烬×3(上飘渐隐),
+    // 位置/透明度由 render_title 按拍幂等重写
+    s_t_core = lv_obj_create(s_content);
+    lv_obj_set_pos(s_t_core, 4, 272);
+    lv_obj_set_size(s_t_core, 190, 4);
+    lv_obj_set_style_radius(s_t_core, 2, 0);
+    lv_obj_set_style_bg_color(s_t_core, lv_color_hex(COL_AMBER), 0);
+    lv_obj_set_style_bg_opa(s_t_core, 64, 0);
+    lv_obj_set_style_border_width(s_t_core, 0, 0);
+    lv_obj_set_style_pad_all(s_t_core, 0, 0);
+    lv_obj_clear_flag(s_t_core, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < 3; i++) {
+        s_t_flame[i] = lv_obj_create(s_content);
+        lv_obj_set_pos(s_t_flame[i], k_t_fl[i].x, 256 - k_t_fl[i].h);
+        lv_obj_set_size(s_t_flame[i], k_t_fl[i].w, k_t_fl[i].h);
+        lv_obj_set_style_radius(s_t_flame[i], k_t_fl[i].w / 2, 0);
+        lv_obj_set_style_bg_color(s_t_flame[i], lv_color_hex(COL_AMBER), 0);
+        lv_obj_set_style_bg_opa(s_t_flame[i], (lv_opa_t)k_t_fl[i].opa, 0);
+        lv_obj_set_style_border_width(s_t_flame[i], 0, 0);
+        lv_obj_set_style_pad_all(s_t_flame[i], 0, 0);
+        lv_obj_clear_flag(s_t_flame[i], LV_OBJ_FLAG_SCROLLABLE);
+        s_t_ember[i] = lv_obj_create(s_content);
+        lv_obj_set_pos(s_t_ember[i], k_t_emb_x[i], 247);
+        lv_obj_set_size(s_t_ember[i], 3, 3);
+        lv_obj_set_style_radius(s_t_ember[i], 1, 0);
+        lv_obj_set_style_bg_color(s_t_ember[i], lv_color_hex(COL_AMBER), 0);
+        lv_obj_set_style_bg_opa(s_t_ember[i], 150, 0);
+        lv_obj_set_style_border_width(s_t_ember[i], 0, 0);
+        lv_obj_set_style_pad_all(s_t_ember[i], 0, 0);
+        lv_obj_clear_flag(s_t_ember[i], LV_OBJ_FLAG_SCROLLABLE);
+    }
 
 
     // 地图 9×9 格 @(14,44) 格10px 间隔1(左移腾出右侧全量图例双列)
@@ -1106,6 +1147,11 @@ static void clear_scene(void) {
     lv_obj_add_flag(s_t_ok, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_t_rule, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_t_fire, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_t_core, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < 3; i++) {
+        lv_obj_add_flag(s_t_flame[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_t_ember[i], LV_OBJ_FLAG_HIDDEN);
+    }
     lv_obj_add_flag(s_story, LV_OBJ_FLAG_HIDDEN);
     for (int i = 0; i < MAP_CELLS; i++) lv_obj_add_flag(s_map[i], LV_OBJ_FLAG_HIDDEN);
     for (int i = 0; i < LEG_KINDS; i++) {
@@ -2409,6 +2455,11 @@ static void render_title(void) {
     lv_obj_clear_flag(s_t_ok, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_t_rule, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_t_fire, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_t_core, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < 3; i++) {
+        lv_obj_clear_flag(s_t_flame[i], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_t_ember[i], LV_OBJ_FLAG_HIDDEN);
+    }
     // 打字机(T3):250ms/字逐显 6 字;未完时由 tick 置脏续拍,完则静止
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
     if (s_title_reveal_ms == 0) s_title_reveal_ms = now;
@@ -2427,6 +2478,29 @@ static void render_title(void) {
     int opa = (k * 85 > 255) ? 255 : k * 85;
     lv_obj_set_style_text_opa(s_t_big, (lv_opa_t)opa, 0);
     lv_obj_set_style_text_opa(s_t_rule, (lv_opa_t)opa, 0);
+    // T9 火焰动效:拍号由 tick 推进(静默 15s 冻结,不做无限循环);
+    // 全部透明度乘点燃系数 k/6,与打字机/火光带同步苏醒
+    int b = s_title_beat;
+    int ig = k * 255 / 6;   // 点燃系数 0..255
+    static const int core_tbl[4] = { 76, 52, 64, 44 };    // 火芯呼吸
+    static const int fl_tbl[6] = { 18, -14, 6, -10, 14, -6 };   // 火舌错相闪烁
+    static const int br_tbl[4] = { 235, 250, 255, 247 };  // 标题微呼吸
+    lv_obj_set_style_bg_opa(s_t_core,
+        (lv_opa_t)(core_tbl[b % 4] * ig / 255), 0);
+    for (int i = 0; i < 3; i++) {
+        int fopa = k_t_fl[i].opa + fl_tbl[(b + i * 2) % 6];
+        if (fopa < 10) fopa = 10;
+        lv_obj_set_style_bg_opa(s_t_flame[i],
+            (lv_opa_t)(fopa * ig / 255), 0);
+        lv_obj_set_y(s_t_flame[i],
+                     256 - k_t_fl[i].h + ((b + i) % 2));
+        int ph = (b + i * 3) % 8;
+        lv_obj_set_pos(s_t_ember[i], k_t_emb_x[i] + ((b + i) % 4) - 1,
+                       250 - ph * 9);
+        lv_obj_set_style_bg_opa(s_t_ember[i],
+            (lv_opa_t)((150 - ph * 18) * ig / 255), 0);
+    }
+    lv_obj_set_style_text_opa(s_t_big, (lv_opa_t)br_tbl[b % 4] * ig / 255, 0);
 }
 
 static void render(void) {
@@ -2710,6 +2784,7 @@ static void page_goto(page_t p) {
     s.village_adj = -1;   // 离开村庄页/任意切页退出人数调节
     s.outfit_adj = -1;    // 离开整备态
     s_title_reveal_ms = 0;   // 标题打字机基准(T3):进标题页首帧重记
+    s_title_beat = 0;        // 火焰动效拍同步归零(T9),重进标题页重放
     s.dpanel_drop = (p == PG_EVENT || p == PG_CONFIRM) ? 2 : 0;   // T7a 上滑
     s.log_focus = false;    // T8:日志窗聚焦/选中态只在主页存续,切页即退
     s.log_browse = false;
@@ -3445,10 +3520,20 @@ static void tick(lv_timer_t *t) {
         lv_obj_set_style_text_color(s_hint, lv_color_hex(COL_DIM), 0);
         s.dirty = true;
     }
-    // 标题页打字机未完(T3):逐拍置脏推进揭示,完则不再重绘
-    if (s.page == PG_TITLE && s_title_reveal_ms != 0 &&
-        (int)((now_ms - s_title_reveal_ms) / 250u) < 6)
-        s.dirty = true;
+    // 标题页动效(T3/T9):打字机未完或火焰拍推进时置脏;
+    // 火焰拍有 15s 静默冻结(不做无限循环,保功耗与吞键窗)
+    if (s.page == PG_TITLE && s_title_reveal_ms != 0) {
+        int c = (int)((now_ms - s_title_reveal_ms) / 250u);
+        if (c < 6) s.dirty = true;
+        if (c > (int)s_title_beat) {
+            uint32_t base = s.last_input_ms ? s.last_input_ms
+                                            : s_title_reveal_ms;
+            if (now_ms - base < 15000u) {
+                s_title_beat = (uint16_t)c;
+                s.dirty = true;
+            }
+        }
+    }
     // 弹窗上滑未归位(T7a):逐拍递减驱动重绘
     if (s.dpanel_drop > 0 && (s.page == PG_EVENT || s.page == PG_CONFIRM)) {
         s.dpanel_drop--;
