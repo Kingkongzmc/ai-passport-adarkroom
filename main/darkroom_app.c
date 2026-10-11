@@ -933,7 +933,10 @@ static void render_home_log(int n_acts, int act_top) {
 }
 
 // 动作行:文字 + 焦点 + 冷却填充百分比(0=就绪无底色)。
-// 焦点态(T1):整行反色金底墨字;冷却中退为 1px 金描边(墨字压暗条不可读)
+// 焦点态(T1):整行反色金底墨字;冷却中退为 1px 金描边(墨字压暗条不可读)。
+// 反色块修正(真机反馈):行容器 22 高,行距 19/20/21 的页面金底会压到下一行
+// 1-3px → 反色时块高收到 18;墨字在 22 高容器里贴顶(上缝 2/下缝 9),
+// 反色时标签下移 2px,使其在 18 高块内垂直居中
 static void set_act(actrow_t *a, const char *text, bool focus, int fill_pct) {
     lv_label_set_text(a->arrow, focus ? ">" : "");
     lv_label_set_text(a->lbl, text);
@@ -948,6 +951,10 @@ static void set_act(actrow_t *a, const char *text, bool focus, int fill_pct) {
                                 lv_color_hex(inv ? COL_INK : COL_GOLD), 0);
     lv_obj_set_style_text_color(a->lbl,
         lv_color_hex(inv ? COL_INK : focus ? COL_GOLD : COL_TEXT), 0);
+    lv_obj_set_size(a->row, lv_obj_get_width(a->row), inv ? 18 : 22);
+    int ty = inv ? 3 : 1;
+    lv_obj_set_pos(a->arrow, 2, ty);
+    lv_obj_set_pos(a->lbl, 2 + ARROW_W12, ty);
     if (fill_pct > 0) {
         lv_obj_clear_flag(a->fill, LV_OBJ_FLAG_HIDDEN);
         // 铺满所在行内宽(主页动作行 198 / 弹窗选项行 172),
@@ -964,7 +971,9 @@ static void hide_acts(void) {
 }
 
 // 列表行:t 名称(focus 反色墨字/lock 灰) v 值(右对齐)。
-// T1:焦点整行反色金底墨字;锁定行永不反色
+// T1:焦点整行反色金底墨字;锁定行永不反色。
+// 反色块修正(同 set_act,真机反馈):块高收 18 防压下一行,文字下移居中,
+// 箭头金→墨(金底上金箭头不可见)
 static void set_row(int i, int y, const char *t, const char *v,
                     bool focus, bool lock) {
     listrow_t *r = &s_list[i];
@@ -974,12 +983,19 @@ static void set_row(int i, int y, const char *t, const char *v,
     lv_obj_set_style_bg_opa(r->row, inv ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
     if (inv)
         lv_obj_set_style_bg_color(r->row, lv_color_hex(COL_GOLD), 0);
+    lv_obj_set_size(r->row, 198, inv ? 18 : 22);
+    int ty = inv ? 3 : 1;
     lv_label_set_text(r->mark, focus ? ">" : "");
+    lv_obj_set_pos(r->mark, 4, ty);
+    lv_obj_set_style_text_color(r->mark,
+                                lv_color_hex(inv ? COL_INK : COL_GOLD), 0);
     lv_label_set_text(r->t, t);
+    lv_obj_set_pos(r->t, 4 + ARROW_W12, ty);
     lv_obj_set_style_text_color(r->t,
         lv_color_hex(inv ? COL_INK
                          : focus ? COL_GOLD : lock ? COL_LOCK : COL_TEXT), 0);
     lv_label_set_text(r->v, v);
+    lv_obj_set_pos(r->v, 72, ty);
     lv_obj_set_style_text_color(r->v,
         lv_color_hex(inv ? COL_INK : lock ? COL_LOCK : COL_DIM), 0);
 }
@@ -1108,9 +1124,19 @@ static void render_home(uint32_t now_ms) {
     bool act_focus = (s.nav_focus < 0);   // 光标在页签上时动作区整体去焦点
     bool no_wood = s.game.res[DR_RES_WOOD] < DR_FIRE_LIGHT_COST;
     int sp = stoke_pct(now_ms);
-    const char *stoke = (s.game.fire_lv == DR_FIRE_DEAD)
-                            ? (sp > 0 ? "点火中…" : (no_wood ? "点火(缺木)" : "点火(5木)"))
-                            : (sp > 0 ? "添柴中…" : "添柴(1木)");
+    char stbuf[24];
+    const char *stoke;
+    if (sp > 0) {   // 冷却剩余秒数就地可见(UX:原来只有暗条无数字)
+        long rem_s = (long)((s.rules_rt.stoke_ready_ms - now_ms + 999) / 1000);
+        snprintf(stbuf, sizeof(stbuf), "%s%lds",
+                 s.game.fire_lv == DR_FIRE_DEAD ? "点火中·" : "添柴中·",
+                 rem_s);
+        stoke = stbuf;
+    } else {
+        stoke = (s.game.fire_lv == DR_FIRE_DEAD)
+                    ? (no_wood ? "点火(缺木)" : "点火(5木)")
+                    : "添柴(1木)";
+    }
     set_act(&s_acts[idx], stoke, act_focus && s.focus == idx, sp);
     lv_obj_set_pos(s_acts[idx].row, 0, gy);
     gy += 24;
