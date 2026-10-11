@@ -2,12 +2,14 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>小黑屋 · 竖屏 240×320 像素级切片 v7(LVGL 同构,与固件实装一比一)</title>
+<title>小黑屋 · 竖屏 240×320 像素级切片 v8(LVGL 同构,与固件实装一比一)</title>
 <style>
   /* ============================================================
-     切片规范 v7 · 竖屏 240×320 · 与固件实装一比一(2026-10-11)
+     切片规范 v8 · 竖屏 240×320 · 与固件实装一比一(2026-10-11)
+     v7→v8:补齐 T8 日志浏览(②b 选中态)/M5 现状对齐(战斗 6 动作/
+     贸易 10 货/设置 8 行,存档码门控隐藏)/整备承重数据对齐
      v6→v7 同步:M5/M6/M7 现状(5 页签/18 页/战斗 ≤6 动作/事件 5 选项/
-     设置 9 行/存档码导出导入/升空结局叙事页)+ 美化 T1-T5:
+     升空结局叙事页)+ 美化 T1-T5:
      T1 焦点反色(金底墨字;冷却/不可付=描边;锁定永不反色)
      T2 场景身份(页标题 accent+页头规则线/短色条)
      T3 标题页(顶饰线/火光带/副标题打字机)
@@ -631,36 +633,6 @@
 <div class="spec">执行者(合金和解或士兵战)解锁 | 四件:刺刀/激光步枪(lv5/6 耗元件)/手雷(15 伤害)/流星锤(眩晕 2 回合) | 缺口就地显示</div>
 </div>
 
-<div class="item">
-<div class="label">⑰ 存档码导出(M7;拍码翻页)</div>
-<div class="scr"><div class="panel"><div class="content">
-  <div class="txtblk f12 a-dim bold" style="left:0px; top:0px; width:100px;">存档码</div>
-  <div class="txtblk f12 gold ctr" style="left:0px; top:30px; width:198px;">第1/4页</div>
-  <div class="txtblk f12 text" style="left:8px; top:120px; width:30px; text-align:center;">I</div>
-  <div class="txtblk f12 text" style="left:40px; top:120px; width:30px; text-align:center;">R</div>
-  <div class="txtblk f12 text" style="left:72px; top:120px; width:30px; text-align:center;">F</div>
-  <div class="txtblk f12 text" style="left:104px; top:120px; width:30px; text-align:center;">Q</div>
-  <div class="txtblk f12 text" style="left:136px; top:120px; width:30px; text-align:center;">M</div>
-  <div class="txtblk f12 text" style="left:168px; top:120px; width:30px; text-align:center;">B</div>
-  <div class="hint" style="top:256px;">拍照后按确定翻页</div>
-</div>
-</div></div>
-<div class="spec">核心档 173B→RLE→base32,CRC8 帧校验 | 6 字符/页 32px 步进(拍照可辨) | 无焦点:确定=下一页,尾页=返回,长按=回第 1 页 | 当前 DR_FEATURE_SAVECODE=0 门控隐藏(串口导入就绪后放出)</div>
-</div>
-
-<div class="item">
-<div class="label">⑱ 导入存档码(M7;逐字符)</div>
-<div class="scr"><div class="panel"><div class="content">
-  <div class="txtblk f12 a-dim bold" style="left:0px; top:0px; width:110px;">导入存档码</div>
-  <div class="txtblk f12 dim" style="left:150px; top:2px; width:48px; text-align:right;">87%</div>
-  <div class="txtblk f12 text" style="left:8px; top:70px; width:190px;">IRFQMB</div>
-  <div class="txtblk f12 gold" style="left:8px; top:92px; width:190px;">A2T7XZ</div>
-  <div class="txtblk f12 dim" style="left:8px; top:114px; width:190px;">MQ___</div>
-  <div class="hint" style="top:256px;">上/下换字 确定=下一位 长按=退格</div>
-</div>
-</div></div>
-<div class="spec">3 行回看窗(当前行金字,光标位实时预览草稿) | base32 A-Z2-7 | 校验失败:确定=重来 长按=退出;双击下键随时退出 | 导入成功=整档恢复 | 同受 SAVECODE 门控(导入手感候选:串口导入,见计划文档) | 当前门控隐藏</div>
-</div>
 
 </body>
 </html>

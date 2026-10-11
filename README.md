@@ -33,8 +33,8 @@ FoloToy AI Passport(ESP32-C3,240×320 圆屏,三键)上的菜单式文字放置�
 | 事件弹窗 | 确认弹窗 | 星舰(第四幕) |
 | ![制造台](docs/screenshots/13_fab.png) | ![升空](docs/screenshots/14_liftoff.png) | ![结局](docs/screenshots/15_ending.png) |
 | 制造台 | 升空叙事 | 结局/周目 |
-| ![存档码](docs/screenshots/16_export.png) | ![导入](docs/screenshots/17_import.png) | ![整备](docs/screenshots/18_prep.png) |
-| 存档码导出 | 存档码导入 | 荒野整备 |
+| ![整备](docs/screenshots/16_prep.png) | ![日志浏览](docs/screenshots/17_logbrowse.png) | ![结局](docs/screenshots/15_ending.png) |
+| 荒野整备 | 日志浏览(选中态) | 结局/周目 |
 
 ## 操作(上 / 下 / 确定三键)
 
